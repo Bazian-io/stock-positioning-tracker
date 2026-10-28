@@ -405,3 +405,45 @@ test("the CIK migration records existing investors without changing their data",
     await database.close();
   }
 });
+
+test("the raw_row migration keeps only fields the columns cannot reproduce, and refuses to lose any", async () => {
+  const name = "20261028210000_compact_holding_raw_rows.sql";
+  const database = await createDatabase(migrations.indexOf(name));
+  const migration = await readFile(new URL(name, migrationsDir), "utf8");
+  const addHolding = (rawRow) => database.query(`insert into public.holdings (filing_id, source_row, reported_issuer, reported_cusip,
+      quantity, quantity_type, reported_value, voting_sole, voting_shared, voting_none, raw_row)
+    values ('00000000-0000-0000-0000-000000000003', 1, 'Example issuer', '123456789', 10, 'SH', 100, 10, 0, 0, $1::jsonb)`,
+  [JSON.stringify(rawRow)]);
+  try {
+    await database.exec(`
+      insert into public.investors (id, name, cik) values ('00000000-0000-0000-0000-000000000001', 'Existing manager', '0000000042');
+      insert into public.collection_runs (id, collector, provider) values ('00000000-0000-0000-0000-000000000002', 'sec13f', 'sec');
+      insert into public.filings (id, investor_id, collection_run_id, accession_number, report_period, filed_at, form_type,
+        report_type, reported_entry_count, reported_total_value, value_multiplier, source_url)
+      values ('00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002',
+        '0000000042-26-000001', '2026-06-30', '2026-08-01T12:00:00Z', '13F-HR', 'holdings', 1, 100, 1,
+        'https://www.sec.gov/Archives/edgar/data/42/000000004226000001/0000000042-26-000001.txt');
+    `);
+    // A stored row without a field its columns hold could not be rebuilt afterwards: nothing changes.
+    await addHolding({ cusip: "123456789" });
+    await assert.rejects(database.exec(migration), /would lose source data/);
+    await database.exec("rollback;");
+    assert.deepEqual((await database.query("select raw_row from public.holdings")).rows, [{ raw_row: { cusip: "123456789" } }]);
+
+    await database.exec("delete from public.holdings;");
+    await addHolding({
+      nameOfIssuer: "Example issuer", cusip: "123456789", figi: "BBG000000001", value: "100",
+      shrsOrPrnAmt: { sshPrnamt: "10", sshPrnamtType: "SH" }, votingAuthority: { Sole: "10", Shared: "0", None: "0" },
+    });
+    await database.exec("update public.filings set import_status = 'complete' where id = '00000000-0000-0000-0000-000000000003';");
+    await database.exec(migration);
+    assert.deepEqual((await database.query("select raw_row from public.portfolio_holdings")).rows, [{ raw_row: { figi: "BBG000000001" } }]);
+    // The recreated view keeps its read-only access, and completed rows stay immutable.
+    assert.deepEqual((await database.query(`select
+      has_table_privilege('anon', 'public.portfolio_holdings', 'SELECT') as read,
+      has_table_privilege('anon', 'public.portfolio_holdings', 'INSERT') as write`)).rows, [{ read: true, write: false }]);
+    await assert.rejects(database.query("update public.holdings set raw_row = '{}'"), /immutable/);
+  } finally {
+    await database.close();
+  }
+});

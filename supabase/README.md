@@ -50,9 +50,15 @@ under a newer filing format. Exact decimal numbers are used for quantities
 and money; unavailable values remain null rather than becoming zero.
 
 Keep `source_url` and, when available, a SHA-256 `source_checksum` and an
-archived `source_document_reference`. Store only data in `raw_row`, never
-request credentials or signed URLs. Large original files can be archived in
+archived `source_document_reference`. Large original files can be archived in
 private object storage later; this migration does not create storage buckets.
+
+Each holding's typed columns hold its information-table fields. `raw_row` keeps
+only what those columns cannot reproduce exactly: fields the collector does not
+read (such as `figi`) and values in a non-standard format. The SEC row is the
+columns' fields plus `raw_row`, so `raw_row` is usually `{}`; see
+`collectors/sec13f/source-row.mts`. Store only source data in `raw_row`, never
+request credentials or signed URLs.
 
 Completed filings and their source rows are immutable. Updating a holding's
 `security_id` is allowed so unresolved identifiers can be matched later.

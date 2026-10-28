@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { reportedPortfolio, type ReportedPortfolio } from "./amendments.mts";
 import { toUnits, type Filing13F, type Holding } from "./parse.mts";
+import { sourceRow, unreportedFields, type HoldingColumns } from "./source-row.mts";
 
 // A parsed filing plus its SEC index metadata and download provenance.
 export type SourceFiling = Filing13F & {
@@ -90,7 +91,25 @@ export function holdingRow(filingId: string, holding: Holding) {
     voting_shared: holding.votingShared,
     voting_none: holding.votingNone,
     other_manager_numbers: holding.otherManagers,
-    raw_row: holding.raw,
+    raw_row: unreportedFields(holding), // Only what the columns above cannot reproduce.
+  };
+}
+
+// A stored holding row (HOLDING_COLUMNS) in the shape sourceRow() rebuilds the SEC row from.
+function storedColumns(row: Row): HoldingColumns {
+  return {
+    issuer: row.reported_issuer as string,
+    titleOfClass: row.reported_class as string | null,
+    cusip: row.reported_cusip as string | null,
+    value: row.reported_value as string,
+    quantity: row.quantity as string,
+    quantityType: row.quantity_type as string,
+    positionType: row.position_type as string,
+    investmentDiscretion: row.investment_discretion as string | null,
+    otherManagers: row.other_manager_numbers as string[],
+    votingSole: row.voting_sole as string | null,
+    votingShared: row.voting_shared as string | null,
+    votingNone: row.voting_none as string | null,
   };
 }
 
@@ -123,6 +142,9 @@ export function compareStored(source: SourceFiling, stored: StoredFiling, ids: F
       if (!same) {
         problems.push(`Row ${holding.sourceRow} ${column}: SEC ${JSON.stringify(expected)}, database ${JSON.stringify(actual[column])}`);
       }
+    }
+    if (index < stored.holdings.length && !isDeepStrictEqual(sourceRow(storedColumns(actual), (actual.raw_row ?? {}) as Row), holding.raw)) {
+      problems.push(`Row ${holding.sourceRow}: the stored columns and raw_row do not rebuild the SEC row`);
     }
   });
   const storedTotal = stored.holdings.reduce(

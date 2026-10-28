@@ -7,6 +7,7 @@ import {
   cikHistory, createSecClient, findFiling, findQuarterFilings, fullSubmissionUrl, normalizeCik, normalizeQuarter,
   quarterRange, type SecClient,
 } from "./sec.mts";
+import { sourceRow, unreportedFields } from "./source-row.mts";
 import { comparePortfolio, compareStored, filingRow, holdingRow, type FilingIds, type SourceFiling } from "./store.mts";
 
 const ids: FilingIds = { investorId: "investor-1", runId: "run-1", originalFilingId: null };
@@ -146,6 +147,27 @@ test("keeps every source row with exact identifiers, units and option flags", ()
     ["0", "100", "0"],
   );
   assert.equal(holdings[1].raw.figi, "BBG000000001");
+});
+
+test("raw_row keeps only what the columns cannot reproduce, and the SEC row is rebuilt exactly", () => {
+  const { holdings } = parseFullSubmission(sample);
+  // Row 2 has a field the parser does not read (figi) and a manager list written as "1, 2".
+  assert.deepEqual(holdings.map((holding) => unreportedFields(holding)), [{}, { figi: "BBG000000001", otherManager: "1, 2" }, {}, {}]);
+  // Padded numbers, other spellings and fields SEC may add later are kept as filed.
+  const unusual = {
+    ...holdings[2],
+    value: "0300.00",
+    raw: {
+      ...holdings[2].raw,
+      value: "0300.00",
+      putCall: "PUT",
+      votingAuthority: { ...(holdings[2].raw.votingAuthority as object), Note: "new field" },
+    },
+  };
+  assert.deepEqual(unreportedFields(unusual), { value: "0300.00", putCall: "PUT", votingAuthority: { Note: "new field" } });
+  for (const holding of [...holdings, unusual]) assert.deepEqual(sourceRow(holding, unreportedFields(holding)), holding.raw);
+  // A source row that lacks a field its columns hold could not be rebuilt, so it is refused.
+  assert.throws(() => unreportedFields({ ...holdings[0], raw: { cusip: holdings[0].cusip } }), /without losing source fields/);
 });
 
 test("rejects filings whose information table disagrees with the summary page", () => {
@@ -351,6 +373,7 @@ test("verification reports changed, missing and incomplete stored data", () => {
   assert.ok(problems.some((problem) => problem.startsWith("Filing original_filing_id")));
   assert.ok(problems.some((problem) => problem.startsWith("Row 3 quantity")));
   assert.ok(problems.some((problem) => problem.startsWith("Row 2 raw_row")));
+  assert.ok(problems.includes("Row 2: the stored columns and raw_row do not rebuild the SEC row"));
   assert.ok(problems.some((problem) => problem === "SEC filing has 4 rows; database has 3"));
   assert.ok(problems.some((problem) => problem.startsWith("Stored rows sum to 3800")));
 });

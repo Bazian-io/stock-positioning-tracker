@@ -15,10 +15,15 @@ import {
 type Row = Record<string, unknown>;
 let db: PGlite;
 
-before(async () => {
-  db = new PGlite({ extensions: { btree_gist } });
+const migrationsDir = new URL("../../supabase/migrations/", import.meta.url);
+const migrations = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
+const COMPACT_RAW_ROWS = "20261028210000_compact_holding_raw_rows.sql";
+
+// A disposable database with the first `count` migrations applied.
+async function createDatabase(count = migrations.length): Promise<PGlite> {
+  const database = new PGlite({ extensions: { btree_gist } });
   // Supabase provides these roles. Reproduce them only inside this disposable database.
-  await db.exec(`
+  await database.exec(`
     create role anon nologin;
     create role authenticated nologin;
     create role service_role nologin bypassrls;
@@ -26,10 +31,12 @@ before(async () => {
     alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
     alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
   `);
-  const migrations = new URL("../../supabase/migrations/", import.meta.url);
-  for (const name of (await readdir(migrations)).filter((file) => file.endsWith(".sql")).sort()) {
-    await db.exec(await readFile(new URL(name, migrations), "utf8"));
-  }
+  for (const name of migrations.slice(0, count)) await database.exec(await readFile(new URL(name, migrationsDir), "utf8"));
+  return database;
+}
+
+before(async () => {
+  db = await createDatabase();
 });
 
 beforeEach(async () => {
@@ -42,18 +49,18 @@ after(async () => {
   await db?.close();
 });
 
-async function insert(table: string, row: Row): Promise<string> {
+async function insert(table: string, row: Row, database = db): Promise<string> {
   const columns = Object.keys(row);
   assert.ok([table, ...columns].every((name) => /^[a-z_]+$/.test(name)));
-  const result = await db.query<{ id: string }>(
+  const result = await database.query<{ id: string }>(
     `insert into public.${table} (${columns}) select ${columns} from jsonb_populate_record(null::public.${table}, $1::jsonb) returning id::text`,
     [JSON.stringify(row)],
   );
   return result.rows[0].id;
 }
 
-async function selectJson(sql: string, params: unknown[]): Promise<Row[]> {
-  const result = await db.query<{ rows: Row[] }>(`select coalesce(jsonb_agg(api), '[]'::jsonb) as rows from (${sql}) api`, params);
+async function selectJson(sql: string, params: unknown[], database = db): Promise<Row[]> {
+  const result = await database.query<{ rows: Row[] }>(`select coalesce(jsonb_agg(api), '[]'::jsonb) as rows from (${sql}) api`, params);
   return result.rows[0].rows;
 }
 
@@ -116,4 +123,32 @@ test("the views use the latest restatement plus later new holdings, as the colle
   assert.equal(views.summary?.holding_row_count, 5);
   // Replaced filings remain stored as amendment history.
   assert.equal((await selectJson("select id from public.filings", [])).length, 4);
+});
+
+test("the raw_row migration keeps exactly the fields the collector keeps, so stored filings still verify", async () => {
+  const legacy = await createDatabase(migrations.indexOf(COMPACT_RAW_ROWS));
+  try {
+    const unusual = { ...sampleRows[2], value: "0300.00", raw: { ...sampleRows[2].raw, value: "0300.00", putCall: "PUT" } };
+    const filing = variant("0000000000-26-000001", "2026-08-14T20:05:04.000Z", "none", 0, [...sampleRows, unusual]);
+    const ids: FilingIds = {
+      investorId: await insert("investors", { name: filing.managerName, cik: filing.cik }, legacy),
+      runId: await insert("collection_runs", { collector: "sec13f", provider: "sec" }, legacy),
+      originalFilingId: null,
+    };
+    const filingId = await insert("filings", filingRow(filing, ids), legacy);
+    // Stored as the collector did before the migration: raw_row held the full SEC row.
+    for (const holding of filing.holdings) await insert("holdings", { ...holdingRow(filingId, holding), raw_row: holding.raw }, legacy);
+    await legacy.query("update public.filings set import_status = 'complete' where id = $1", [filingId]);
+
+    await legacy.exec(await readFile(new URL(COMPACT_RAW_ROWS, migrationsDir), "utf8"));
+    const stored = {
+      filing: (await selectJson(`select ${FILING_COLUMNS} from public.filings where id = $1`, [filingId], legacy))[0],
+      holdings: await selectJson(`select ${HOLDING_COLUMNS} from public.holdings where filing_id = $1 order by source_row`, [filingId], legacy),
+    };
+    assert.deepEqual(stored.holdings.map((row) => row.raw_row), filing.holdings.map((holding) => holdingRow(filingId, holding).raw_row));
+    assert.deepEqual(stored.holdings.map((row) => row.raw_row), [{}, { figi: "BBG000000001", otherManager: "1, 2" }, {}, {}, { value: "0300.00", putCall: "PUT" }]);
+    assert.deepEqual(compareStored(filing, stored, ids), []);
+  } finally {
+    await legacy.close();
+  }
 });

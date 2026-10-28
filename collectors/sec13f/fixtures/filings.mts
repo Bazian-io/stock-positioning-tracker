@@ -31,10 +31,16 @@ export function amendmentText(type: string, number: number | null): string {
 
 export const sampleRows = sourceFiling().holdings;
 
+// A position the sample does not report, with a matching source row.
+function newHolding(issuer: string, cusip: string, quantity: string, value: string): Holding {
+  const raw = { ...sampleRows[0].raw, nameOfIssuer: issuer, cusip, value, shrsOrPrnAmt: { sshPrnamt: quantity, sshPrnamtType: "SH" } };
+  return { ...sampleRows[0], issuer, cusip, quantity, value, raw };
+}
+
 // Positions the sample does not report, for new-holdings amendments.
 export const newRows: Holding[] = [
-  { ...sampleRows[0], issuer: "NEW HOLDING ONE", cusip: "11111A111", quantity: "30", value: "900", raw: { cusip: "11111A111" } },
-  { ...sampleRows[0], issuer: "NEW HOLDING TWO", cusip: "22222B222", quantity: "20", value: "600", raw: { cusip: "22222B222" } },
+  newHolding("NEW HOLDING ONE", "11111A111", "30", "900"),
+  newHolding("NEW HOLDING TWO", "22222B222", "20", "600"),
 ];
 
 // A filing by the sample manager for the sample quarter, with chosen rows and amendment details.

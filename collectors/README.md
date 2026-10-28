@@ -37,8 +37,9 @@ Each run, per quarter:
 3. Logs one `collection_runs` row for the quarter, then imports the original followed by each
    amendment, linked to the original. Each filing is added as `pending` with every source row and
    then marked `complete`; the database re-checks counts, row numbering and totals before accepting.
-4. Reads every stored row back and compares it field by field with the SEC data, then checks that
-   the research views (`portfolio_filings`, `quarterly_portfolios`) show exactly the reported holdings.
+4. Reads every stored row back, compares it field by field with the SEC data and rebuilds the exact
+   SEC row from it (`raw_row` keeps only fields the columns cannot reproduce), then checks that the
+   research views (`portfolio_filings`, `quarterly_portfolios`) show exactly the reported holdings.
 
 Running again is safe. A completed filing (matched by accession number) is never imported twice;
 the run re-verifies it, so re-running a quarter adds only amendments filed since. Rows left by an
