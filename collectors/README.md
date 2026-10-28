@@ -16,16 +16,18 @@ Copy `.env.example` to `.env.local` (ignored by git) and fill in:
 ## SEC 13F pilot
 
 ```sh
-npm run collect:13f -- --dry-run      # download and check only; no database changes
-npm run collect:13f                   # import Berkshire Hathaway's latest 13F-HR
-npm run collect:13f -- --cik 1067983  # choose the manager by CIK
-npm run test:collectors               # offline tests with a synthetic filing
+npm run collect:13f -- --dry-run             # download and check only; no database changes
+npm run collect:13f                          # import Berkshire Hathaway's latest 13F-HR
+npm run collect:13f -- --quarter 2026-03-31  # a specific quarter (or 2026Q1); repeat for several
+npm run collect:13f -- --cik 1067983         # choose the manager by CIK
+npm run test:collectors                      # offline tests with a synthetic filing
 ```
 
-Each run:
+Each run, per quarter:
 
-1. Finds the newest original 13F-HR in the manager's SEC submissions index and downloads the
-   full submission text, recording its URL and SHA-256 checksum.
+1. Finds the manager's original 13F-HR for the quarter (default: the newest) in SEC's submissions
+   index, reading older index pages only when needed, and downloads the full submission text,
+   recording its URL and SHA-256 checksum.
 2. Parses the cover page, summary page and information table. The filing is rejected unless the
    table's row count and value total match its own summary page.
 3. Logs a `collection_runs` row, adds the filing as `pending` with every source row, then marks it
@@ -39,5 +41,11 @@ removed and imported again. Run one collector process at a time.
 SEC access: requests send `SEC_USER_AGENT`, are spaced at least 200 ms apart (SEC allows 10 per
 second), retry rate-limit and server errors with backoff, and stop on HTTP 403.
 
+Historical quarters: filings made before 2023-01-03 report values in thousands; they are stored as
+reported with `value_multiplier = 1000`. Older text-format filings, from before 13F reports were
+filed as XML, are not supported.
+
 Not yet handled: amendments (13F-HR/A), notices (13F-NT), mapping rows to `securities`
-(rows keep their reported CUSIPs with `security_id` empty), historical backfill and scheduling.
+(rows keep their reported CUSIPs with `security_id` empty) and scheduling. When SEC lists
+amendments for a quarter (Berkshire amended 2025-03-31, for example), the run prints their
+accession numbers; until amendments are imported, such a quarter shows the original report only.

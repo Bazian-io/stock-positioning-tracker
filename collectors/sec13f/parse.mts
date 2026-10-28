@@ -136,7 +136,7 @@ export function parseFullSubmission(submissionText: string): Filing13F {
     if (type && xml) documents.set(type, xml);
   }
 
-  const submission = path(parser.parse(documents.get("13F-HR") ?? fail("Missing 13F-HR cover document")), "edgarSubmission");
+  const submission = path(parser.parse(documents.get("13F-HR") ?? fail("Missing 13F-HR XML cover document (older text-format filings are not supported)")), "edgarSubmission");
   const submissionType = text(submission, "headerData", "submissionType");
   if (submissionType !== "13F-HR") fail(`Only original 13F-HR filings are supported, not ${submissionType}`);
   const cover = path(submission, "formData", "coverPage");

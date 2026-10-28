@@ -16,6 +16,11 @@ export type FilingIndexEntry = {
   reportDate: string;
 };
 
+// The selected original filing plus any amendments SEC lists for the same report period.
+export type FilingSelection = FilingIndexEntry & { amendments: string[] };
+
+type IndexColumns = Record<"form" | "accessionNumber" | "acceptanceDateTime" | "reportDate", string[]>;
+
 export type SecClient = { get(url: string): Promise<SecDocument> };
 
 export function createSecClient(userAgent: string): SecClient {
@@ -54,22 +59,48 @@ export function normalizeCik(cik: string): string {
   return cik.padStart(10, "0");
 }
 
-export async function findLatestFiling(sec: SecClient, cik: string, form: string): Promise<FilingIndexEntry> {
-  const { text } = await sec.get(`https://data.sec.gov/submissions/CIK${cik}.json`);
-  const recent: Record<"form" | "accessionNumber" | "acceptanceDateTime" | "reportDate", string[]> =
-    JSON.parse(text).filings.recent;
-  const matches = recent.form.flatMap((entryForm, i) =>
-    entryForm === form
-      ? [{
-          accessionNumber: recent.accessionNumber[i],
-          form: entryForm,
-          acceptedAt: recent.acceptanceDateTime[i],
-          reportDate: recent.reportDate[i],
-        }]
-      : [],
+const QUARTER_ENDS = ["03-31", "06-30", "09-30", "12-31"];
+
+// Accepts a quarter-end date (2026-03-31) or a quarter label (2026Q1, 2026-Q1).
+export function normalizeQuarter(quarter: string): string {
+  const label = /^(\d{4})-?Q([1-4])$/i.exec(quarter);
+  if (label) return `${label[1]}-${QUARTER_ENDS[Number(label[2]) - 1]}`;
+  if (/^\d{4}-(03-31|06-30|09-30|12-31)$/.test(quarter)) return quarter;
+  throw new Error(`Invalid quarter: ${quarter}. Use a quarter-end date (2026-03-31) or a label (2026Q1).`);
+}
+
+function indexEntries(columns: IndexColumns): FilingIndexEntry[] {
+  return columns.form.map((form, i) => ({
+    accessionNumber: columns.accessionNumber[i],
+    form,
+    acceptedAt: columns.acceptanceDateTime[i],
+    reportDate: columns.reportDate[i],
+  }));
+}
+
+// Finds the latest original filing of a form, optionally for one report period (YYYY-MM-DD).
+// SEC's submissions index lists recent filings first and older ones in extra pages, newest
+// first; those pages are fetched only when the requested period is not found earlier.
+export async function findFiling(sec: SecClient, cik: string, form: string, reportDate?: string): Promise<FilingSelection> {
+  const index: { filings: { recent: IndexColumns; files: { name: string }[] } } = JSON.parse(
+    (await sec.get(`https://data.sec.gov/submissions/CIK${cik}.json`)).text,
   );
-  if (matches.length === 0) throw new Error(`No ${form} filing in SEC's recent filings for CIK ${cik}`);
-  return matches.reduce((latest, entry) => (entry.acceptedAt > latest.acceptedAt ? entry : latest));
+  const olderPages = index.filings.files.map((file) => file.name);
+  const seen = indexEntries(index.filings.recent);
+  for (;;) {
+    const originals = seen.filter((entry) => entry.form === form && (!reportDate || entry.reportDate === reportDate));
+    if (originals.length > 0) {
+      const filing = originals.reduce((latest, entry) => (entry.acceptedAt > latest.acceptedAt ? entry : latest));
+      // Amendments are filed after the original, so they are in the pages already read.
+      const amendments = seen
+        .filter((entry) => entry.form === `${form}/A` && entry.reportDate === filing.reportDate)
+        .map((entry) => entry.accessionNumber);
+      return { ...filing, amendments };
+    }
+    const page = olderPages.shift();
+    if (!page) throw new Error(`No ${form} filing${reportDate ? ` for ${reportDate}` : ""} in SEC's index for CIK ${cik}`);
+    seen.push(...indexEntries(JSON.parse((await sec.get(`https://data.sec.gov/submissions/${page}`)).text)));
+  }
 }
 
 export function fullSubmissionUrl(cik: string, accessionNumber: string): string {

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
-import { createSecClient, fullSubmissionUrl, normalizeCik } from "./sec.mts";
+import {
+  createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, type SecClient,
+} from "./sec.mts";
 import { compareStored, holdingRow, type SourceFiling } from "./store.mts";
 
 // Synthetic filing in the EDGAR full-submission format; no real investor data.
@@ -16,6 +18,41 @@ function sourceFiling(text = sample): SourceFiling {
     sourceUrl: "https://www.sec.gov/Archives/edgar/data/1/000000000026000001/0000000000-26-000001.txt",
     sourceChecksum: "a".repeat(64),
   };
+}
+
+// Stand-in for SEC's submissions index: recent filings plus one older page. Records requested URLs.
+function fakeSecIndex() {
+  const columns = (rows: [form: string, accession: string, reportDate: string, acceptedAt: string][]) => ({
+    form: rows.map((row) => row[0]),
+    accessionNumber: rows.map((row) => row[1]),
+    reportDate: rows.map((row) => row[2]),
+    acceptanceDateTime: rows.map((row) => row[3]),
+  });
+  const responses: Record<string, unknown> = {
+    "https://data.sec.gov/submissions/CIK0000000001.json": {
+      filings: {
+        recent: columns([
+          ["4", "0000000000-26-000009", "", "2026-09-01T20:00:00.000Z"],
+          ["13F-HR", "0000000000-26-000008", "2026-06-30", "2026-08-14T20:05:04.000Z"],
+          ["13F-HR", "0000000000-26-000005", "2026-03-31", "2026-05-15T20:06:05.000Z"],
+          ["13F-HR/A", "0000000000-25-000004", "2025-03-31", "2025-08-14T20:10:02.000Z"],
+          ["13F-HR", "0000000000-25-000002", "2025-03-31", "2025-05-15T20:06:43.000Z"],
+        ]),
+        files: [{ name: "CIK0000000001-submissions-001.json" }],
+      },
+    },
+    "https://data.sec.gov/submissions/CIK0000000001-submissions-001.json": columns([
+      ["13F-HR", "0000000000-16-000001", "2015-12-31", "2016-02-16T21:00:00.000Z"],
+    ]),
+  };
+  const requested: string[] = [];
+  const sec: SecClient = {
+    async get(url) {
+      requested.push(url);
+      return { url, text: JSON.stringify(responses[url]), sha256: "" };
+    },
+  };
+  return { sec, requested };
 }
 
 // The same filing as the database returns it: numeric(24,4) text and an extra filing_id column.
@@ -108,6 +145,38 @@ test("SEC requests require a contact User-Agent and use EDGAR archive paths", ()
     fullSubmissionUrl("0001067983", "0001193125-26-352200"),
     "https://www.sec.gov/Archives/edgar/data/1067983/000119312526352200/0001193125-26-352200.txt",
   );
+});
+
+test("quarters can be given as quarter-end dates or labels", () => {
+  assert.equal(normalizeQuarter("2026-03-31"), "2026-03-31");
+  assert.equal(normalizeQuarter("2026Q1"), "2026-03-31");
+  assert.equal(normalizeQuarter("2025-q4"), "2025-12-31");
+  assert.throws(() => normalizeQuarter("2026-03-30"), /Invalid quarter/);
+  assert.throws(() => normalizeQuarter("2026Q5"), /Invalid quarter/);
+});
+
+test("selects the latest original 13F-HR or the one for a requested quarter", async () => {
+  const { sec, requested } = fakeSecIndex();
+  assert.equal((await findFiling(sec, "0000000001", "13F-HR")).accessionNumber, "0000000000-26-000008");
+  assert.deepEqual(await findFiling(sec, "0000000001", "13F-HR", "2026-03-31"), {
+    accessionNumber: "0000000000-26-000005",
+    form: "13F-HR",
+    acceptedAt: "2026-05-15T20:06:05.000Z",
+    reportDate: "2026-03-31",
+    amendments: [],
+  });
+  const amended = await findFiling(sec, "0000000001", "13F-HR", "2025-03-31");
+  assert.equal(amended.accessionNumber, "0000000000-25-000002");
+  assert.deepEqual(amended.amendments, ["0000000000-25-000004"]);
+  // Each lookup read only the recent index; the older page was not needed.
+  assert.equal(requested.length, 3);
+});
+
+test("historical quarters outside the recent index are found in older index pages", async () => {
+  const { sec, requested } = fakeSecIndex();
+  assert.equal((await findFiling(sec, "0000000001", "13F-HR", "2015-12-31")).accessionNumber, "0000000000-16-000001");
+  assert.equal(requested.at(-1), "https://data.sec.gov/submissions/CIK0000000001-submissions-001.json");
+  await assert.rejects(findFiling(sec, "0000000001", "13F-HR", "2014-12-31"), /No 13F-HR filing for 2014-12-31/);
 });
 
 test("verification accepts an exact stored copy", () => {
