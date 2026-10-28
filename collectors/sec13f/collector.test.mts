@@ -1,26 +1,16 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { reportedPortfolio } from "./amendments.mts";
+import { amendmentText, newRows, sample, sampleRows, sourceFiling, variant } from "./fixtures/filings.mts";
 import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
 import {
   createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, type SecClient,
 } from "./sec.mts";
-import { compareStored, holdingRow, type SourceFiling } from "./store.mts";
+import { comparePortfolio, compareStored, filingRow, holdingRow, type FilingIds, type SourceFiling } from "./store.mts";
 
-// Synthetic filing in the EDGAR full-submission format; no real investor data.
-const sample = await readFile(new URL("./fixtures/sample-13f-hr.txt", import.meta.url), "utf8");
+const ids: FilingIds = { investorId: "investor-1", runId: "run-1", originalFilingId: null };
 
-function sourceFiling(text = sample): SourceFiling {
-  return {
-    ...parseFullSubmission(text),
-    filedAt: "2026-08-14T20:05:04.000Z",
-    valueMultiplier: 1,
-    sourceUrl: "https://www.sec.gov/Archives/edgar/data/1/000000000026000001/0000000000-26-000001.txt",
-    sourceChecksum: "a".repeat(64),
-  };
-}
-
-// Stand-in for SEC's submissions index: recent filings plus one older page. Records requested URLs.
+// Stand-in for SEC's submissions index: recent filings (newest first) plus one older page.
 function fakeSecIndex() {
   const columns = (rows: [form: string, accession: string, reportDate: string, acceptedAt: string][]) => ({
     form: rows.map((row) => row[0]),
@@ -35,6 +25,7 @@ function fakeSecIndex() {
           ["4", "0000000000-26-000009", "", "2026-09-01T20:00:00.000Z"],
           ["13F-HR", "0000000000-26-000008", "2026-06-30", "2026-08-14T20:05:04.000Z"],
           ["13F-HR", "0000000000-26-000005", "2026-03-31", "2026-05-15T20:06:05.000Z"],
+          ["13F-HR/A", "0000000000-25-000006", "2025-03-31", "2025-11-14T21:00:00.000Z"],
           ["13F-HR/A", "0000000000-25-000004", "2025-03-31", "2025-08-14T20:10:02.000Z"],
           ["13F-HR", "0000000000-25-000002", "2025-03-31", "2025-05-15T20:06:43.000Z"],
         ]),
@@ -55,16 +46,15 @@ function fakeSecIndex() {
   return { sec, requested };
 }
 
-// The same filing as the database returns it: numeric(24,4) text and an extra filing_id column.
-function storedCopy(source: SourceFiling) {
+// The same filing as the Supabase API returns it: numeric(24,4) text and timestamps with offsets.
+function storedCopy(source: SourceFiling, filingIds = ids) {
+  const filing = filingRow(source, filingIds);
   return {
     filing: {
+      ...filing,
       import_status: "complete",
-      report_period: source.reportPeriod,
-      reported_entry_count: source.entryTotal,
-      reported_total_value: `${source.valueTotal}.0000`,
-      value_multiplier: source.valueMultiplier,
-      source_checksum: source.sourceChecksum,
+      filed_at: source.filedAt.replace(".000Z", "+00:00"),
+      reported_total_value: `${filing.reported_total_value}.0000`,
     },
     holdings: source.holdings.map((holding) => {
       const row = holdingRow("stored-filing-id", holding);
@@ -77,6 +67,8 @@ test("parses filing identity, summary totals and other managers", () => {
   const filing = parseFullSubmission(sample);
   assert.equal(filing.accessionNumber, "0000000000-26-000001");
   assert.equal(filing.formType, "13F-HR");
+  assert.equal(filing.amendmentType, "none");
+  assert.equal(filing.amendmentNumber, 0);
   assert.equal(filing.cik, "0000000001");
   assert.equal(filing.managerName, "Example Capital Management LLC");
   assert.equal(filing.reportPeriod, "2026-06-30");
@@ -118,16 +110,30 @@ test("rejects filings whose information table disagrees with the summary page", 
   );
 });
 
-test("rejects amendments, unknown documents and malformed amounts", () => {
+test("rejects unsupported forms, inconsistent amendment flags and malformed amounts", () => {
+  assert.throws(
+    () => parseFullSubmission(sample.replace("<submissionType>13F-HR<", "<submissionType>13F-NT<")),
+    /Only 13F-HR filings and their amendments are supported, not 13F-NT/,
+  );
   assert.throws(
     () => parseFullSubmission(sample.replace("<submissionType>13F-HR<", "<submissionType>13F-HR/A<")),
-    /Only original 13F-HR/,
+    /13F-HR\/A cover page has isAmendment=false/,
   );
   assert.throws(() => parseFullSubmission("ACCESSION NUMBER: 0000000000-26-000001"), /Missing 13F-HR/);
   assert.throws(
     () => parseFullSubmission(sample.replace("<ns1:value>1000<", "<ns1:value>1,000<")),
     /Invalid value in information table row 1/,
   );
+});
+
+test("reads the amendment type and number from 13F-HR/A cover pages", () => {
+  const newHoldings = parseFullSubmission(amendmentText("NEW HOLDINGS", 2));
+  assert.equal(newHoldings.formType, "13F-HR/A");
+  assert.equal(newHoldings.amendmentType, "new_holdings");
+  assert.equal(newHoldings.amendmentNumber, 2);
+  assert.equal(parseFullSubmission(amendmentText("RESTATEMENT", 1)).amendmentType, "restatement");
+  assert.throws(() => parseFullSubmission(amendmentText("CORRECTION", 1)), /Unsupported amendment type: CORRECTION/);
+  assert.throws(() => parseFullSubmission(amendmentText("RESTATEMENT", null)), /Invalid amendmentNo/);
 });
 
 test("value units follow the filing date, not the reporting quarter", () => {
@@ -155,9 +161,11 @@ test("quarters can be given as quarter-end dates or labels", () => {
   assert.throws(() => normalizeQuarter("2026Q5"), /Invalid quarter/);
 });
 
-test("selects the latest original 13F-HR or the one for a requested quarter", async () => {
+test("selects a quarter's original 13F-HR together with its amendments, oldest first", async () => {
   const { sec, requested } = fakeSecIndex();
-  assert.equal((await findFiling(sec, "0000000001", "13F-HR")).accessionNumber, "0000000000-26-000008");
+  const latest = await findFiling(sec, "0000000001", "13F-HR");
+  assert.equal(latest.accessionNumber, "0000000000-26-000008");
+  assert.deepEqual(latest.amendments, []);
   assert.deepEqual(await findFiling(sec, "0000000001", "13F-HR", "2026-03-31"), {
     accessionNumber: "0000000000-26-000005",
     form: "13F-HR",
@@ -167,7 +175,10 @@ test("selects the latest original 13F-HR or the one for a requested quarter", as
   });
   const amended = await findFiling(sec, "0000000001", "13F-HR", "2025-03-31");
   assert.equal(amended.accessionNumber, "0000000000-25-000002");
-  assert.deepEqual(amended.amendments, ["0000000000-25-000004"]);
+  assert.deepEqual(amended.amendments.map((entry) => [entry.form, entry.accessionNumber]), [
+    ["13F-HR/A", "0000000000-25-000004"],
+    ["13F-HR/A", "0000000000-25-000006"],
+  ]);
   // Each lookup read only the recent index; the older page was not needed.
   assert.equal(requested.length, 3);
 });
@@ -179,22 +190,89 @@ test("historical quarters outside the recent index are found in older index page
   await assert.rejects(findFiling(sec, "0000000001", "13F-HR", "2014-12-31"), /No 13F-HR filing for 2014-12-31/);
 });
 
-test("verification accepts an exact stored copy", () => {
-  const source = sourceFiling();
-  assert.deepEqual(compareStored(source, storedCopy(source)), []);
+test("new-holdings amendments add their rows to the original report", () => {
+  const original = variant("0000000000-26-000001", "2026-08-14T20:05:04.000Z", "none", 0, sampleRows);
+  const addition = variant("0000000000-26-000002", "2026-11-14T21:00:00.000Z", "new_holdings", 1, newRows);
+  const portfolio = reportedPortfolio([addition, original]);
+  assert.deepEqual(portfolio.filings, [original, addition]);
+  assert.equal(portfolio.rows, 6);
+  assert.equal(portfolio.valueUnits, toUnits("6050"));
+  assert.deepEqual(portfolio.warnings, []);
+  // Each filing keeps its own unit: an original in thousands plus an amendment in dollars.
+  const inThousands = { ...original, valueMultiplier: 1000 as const };
+  assert.equal(reportedPortfolio([inThousands, addition]).valueUnits, toUnits("4551500"));
+});
+
+test("a restatement replaces everything filed before it; later new holdings still add", () => {
+  // Same shape as Berkshire Hathaway's Q3 2023 filings: original, restatement, then new holdings.
+  const original = variant("0000000000-26-000001", "2026-08-14T20:05:04.000Z", "none", 0, sampleRows);
+  const earlyAddition = variant("0000000000-26-000002", "2026-08-15T20:00:00.000Z", "new_holdings", 1, [newRows[0]]);
+  const restatement = variant("0000000000-26-000003", "2026-08-16T20:00:00.000Z", "restatement", 2, sampleRows);
+  const lateAddition = variant("0000000000-26-000004", "2027-05-15T20:00:00.000Z", "new_holdings", 3, [newRows[1]]);
+  const portfolio = reportedPortfolio([lateAddition, restatement, original, earlyAddition]);
+  assert.deepEqual(portfolio.filings.map((filing) => filing.accessionNumber), ["0000000000-26-000003", "0000000000-26-000004"]);
+  assert.equal(portfolio.rows, 5);
+  assert.equal(portfolio.valueUnits, toUnits("5150"));
+  assert.deepEqual(portfolio.warnings, []);
+});
+
+test("warns about amendments that would double-count or drop holdings", () => {
+  const original = variant("0000000000-26-000001", "2026-08-14T20:05:04.000Z", "none", 0, sampleRows);
+  const repeat = variant("0000000000-26-000002", "2026-08-15T20:00:00.000Z", "new_holdings", 1, [sampleRows[0], newRows[0]]);
+  assert.deepEqual(reportedPortfolio([original, repeat]).warnings, [
+    "0000000000-26-000002: new-holdings amendment repeats 1 row(s) already reported; totals may double-count",
+  ]);
+  const partial = variant("0000000000-26-000003", "2026-08-16T20:00:00.000Z", "restatement", 1, [sampleRows[0]]);
+  assert.deepEqual(reportedPortfolio([original, partial]).warnings, [
+    "0000000000-26-000003: restatement reports 1 rows but replaces 4; check that it is complete",
+  ]);
+});
+
+test("verification accepts an exact stored copy, including amendment links", () => {
+  const original = sourceFiling();
+  assert.deepEqual(compareStored(original, storedCopy(original), ids), []);
+  const amendment = sourceFiling(amendmentText("NEW HOLDINGS", 1));
+  const linked = { ...ids, originalFilingId: "original-filing-id" };
+  assert.deepEqual(compareStored(amendment, storedCopy(amendment, linked), linked), []);
 });
 
 test("verification reports changed, missing and incomplete stored data", () => {
-  const source = sourceFiling();
-  const stored = storedCopy(source);
+  const source = sourceFiling(amendmentText("NEW HOLDINGS", 1));
+  const linked = { ...ids, originalFilingId: "original-filing-id" };
+  const stored = storedCopy(source, linked);
   stored.filing.import_status = "pending";
+  stored.filing.amendment_type = "restatement";
+  stored.filing.original_filing_id = "another-filing-id";
   stored.holdings[2].quantity = "11.0000";
   stored.holdings[1].raw_row = { ...stored.holdings[1].raw_row, cusip: "999999999" };
   stored.holdings.pop();
-  const problems = compareStored(source, stored);
+  const problems = compareStored(source, stored, linked);
   assert.ok(problems.some((problem) => problem.startsWith("Filing import_status")));
+  assert.ok(problems.some((problem) => problem.startsWith('Filing amendment_type: SEC "new_holdings"')));
+  assert.ok(problems.some((problem) => problem.startsWith("Filing original_filing_id")));
   assert.ok(problems.some((problem) => problem.startsWith("Row 3 quantity")));
   assert.ok(problems.some((problem) => problem.startsWith("Row 2 raw_row")));
   assert.ok(problems.some((problem) => problem === "SEC filing has 4 rows; database has 3"));
   assert.ok(problems.some((problem) => problem.startsWith("Stored rows sum to 3800")));
+});
+
+test("portfolio check catches replaced filings and double counting in the research views", () => {
+  const original = variant("0000000000-26-000001", "2026-08-14T20:05:04.000Z", "none", 0, sampleRows);
+  const restatement = variant("0000000000-26-000002", "2026-08-16T20:00:00.000Z", "restatement", 1, sampleRows);
+  const addition = variant("0000000000-26-000003", "2027-05-15T20:00:00.000Z", "new_holdings", 2, [newRows[0]]);
+  const expected = reportedPortfolio([original, restatement, addition]);
+  const filingIds = new Map([["0000000000-26-000001", "id-1"], ["0000000000-26-000002", "id-2"], ["0000000000-26-000003", "id-3"]]);
+  const correct = { filingIds: ["id-3", "id-2"], summary: { holding_row_count: 5, value_usd: "5450.0000" } };
+  assert.deepEqual(comparePortfolio(expected, filingIds, correct), []);
+
+  const doubleCounted = { filingIds: ["id-1", "id-2", "id-3"], summary: { holding_row_count: 9, value_usd: "10000.0000" } };
+  assert.deepEqual(comparePortfolio(expected, filingIds, doubleCounted), [
+    "portfolio_filings uses 3 filing(s); expected 0000000000-26-000002 + 0000000000-26-000003",
+    "quarterly_portfolios rows: expected 5, database 9",
+    "quarterly_portfolios value: expected 5450, database 10000.0000",
+  ]);
+  assert.deepEqual(comparePortfolio(expected, filingIds, { filingIds: [], summary: null }), [
+    "portfolio_filings uses 0 filing(s); expected 0000000000-26-000002 + 0000000000-26-000003",
+    "quarterly_portfolios has no row for this quarter",
+  ]);
 });

@@ -16,8 +16,8 @@ export type FilingIndexEntry = {
   reportDate: string;
 };
 
-// The selected original filing plus any amendments SEC lists for the same report period.
-export type FilingSelection = FilingIndexEntry & { amendments: string[] };
+// The selected original filing plus the amendments SEC lists for the same report period, oldest first.
+export type FilingSelection = FilingIndexEntry & { amendments: FilingIndexEntry[] };
 
 type IndexColumns = Record<"form" | "accessionNumber" | "acceptanceDateTime" | "reportDate", string[]>;
 
@@ -94,7 +94,7 @@ export async function findFiling(sec: SecClient, cik: string, form: string, repo
       // Amendments are filed after the original, so they are in the pages already read.
       const amendments = seen
         .filter((entry) => entry.form === `${form}/A` && entry.reportDate === filing.reportDate)
-        .map((entry) => entry.accessionNumber);
+        .sort((a, b) => Date.parse(a.acceptedAt) - Date.parse(b.acceptedAt));
       return { ...filing, amendments };
     }
     const page = olderPages.shift();

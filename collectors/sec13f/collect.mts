@@ -1,12 +1,25 @@
-// Imports original 13F-HR filings from SEC EDGAR into Supabase: the latest, or selected quarters.
+// Imports 13F-HR filings and their amendments from SEC EDGAR into Supabase, one quarter at a time:
+// the latest quarter, or selected ones.
 // Usage: npm run collect:13f -- [--cik 1067983] [--quarter 2026-03-31 | 2026Q1]... [--dry-run]
 import { parseArgs } from "node:util";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { parseFullSubmission, valueMultiplier } from "./parse.mts";
-import { createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, type SecClient } from "./sec.mts";
-import { connect, importFiling } from "./store.mts";
+import { reportedPortfolio } from "./amendments.mts";
+import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
+import {
+  createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, type FilingIndexEntry, type SecClient,
+} from "./sec.mts";
+import { connect, importQuarter, type SourceFiling } from "./store.mts";
 
 const BERKSHIRE_HATHAWAY_CIK = "1067983"; // Pilot default.
+
+const FILING_ROLES: Record<SourceFiling["amendmentType"], string> = {
+  none: "original",
+  restatement: "restatement, replaces the report",
+  new_holdings: "new holdings, adds to the report",
+};
+
+const formatUsd = (units: bigint) => `$${(units / BigInt(10_000)).toLocaleString("en-US")}`;
+const formatRows = (count: number) => `${count} row${count === 1 ? "" : "s"}`;
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -14,40 +27,49 @@ function requireEnv(name: string): string {
   return value;
 }
 
-// Downloads, checks and (unless db is null) imports one filing. quarter undefined means the latest.
-async function collect(sec: SecClient, cik: string, quarter: string | undefined, db: SupabaseClient | null) {
-  const selected = await findFiling(sec, cik, "13F-HR", quarter);
-  const document = await sec.get(fullSubmissionUrl(cik, selected.accessionNumber));
+async function download(sec: SecClient, cik: string, entry: FilingIndexEntry): Promise<SourceFiling> {
+  const document = await sec.get(fullSubmissionUrl(cik, entry.accessionNumber));
   const parsed = parseFullSubmission(document.text);
-  if (parsed.accessionNumber !== selected.accessionNumber || parsed.cik !== cik || parsed.reportPeriod !== selected.reportDate) {
-    throw new Error("Downloaded filing does not match SEC's filing index");
+  if (parsed.accessionNumber !== entry.accessionNumber || parsed.formType !== entry.form
+    || parsed.cik !== cik || parsed.reportPeriod !== entry.reportDate) {
+    throw new Error(`Downloaded filing ${entry.accessionNumber} does not match SEC's filing index`);
   }
-  const source = {
+  return {
     ...parsed,
-    filedAt: selected.acceptedAt,
-    valueMultiplier: valueMultiplier(selected.acceptedAt),
+    filedAt: entry.acceptedAt,
+    valueMultiplier: valueMultiplier(entry.acceptedAt),
     sourceUrl: document.url,
     sourceChecksum: document.sha256,
   };
-  const totalUsd = Number(source.valueTotal) * source.valueMultiplier;
-  console.log(`${source.managerName} ${source.formType} ${source.accessionNumber}`);
-  console.log(`  Quarter ${source.reportPeriod}, filed ${source.filedAt}`);
-  console.log(`  ${source.holdings.length} holdings rows, $${totalUsd.toLocaleString("en-US")}: matches the filing's summary page`);
-  if (selected.amendments.length > 0) {
-    console.log(`  Note: SEC also lists amendments for this quarter (${selected.amendments.join(", ")}), which are not imported yet.`);
+}
+
+// Downloads, checks and (unless db is null) imports one quarter's original filing and its
+// amendments. quarter undefined means the latest quarter.
+async function collect(sec: SecClient, cik: string, quarter: string | undefined, db: SupabaseClient | null) {
+  const selected = await findFiling(sec, cik, "13F-HR", quarter);
+  const filings: SourceFiling[] = [];
+  for (const entry of [selected, ...selected.amendments]) filings.push(await download(sec, cik, entry));
+  const portfolio = reportedPortfolio(filings);
+
+  console.log(`${filings[0].managerName}, quarter ${selected.reportDate}: ${filings.length} SEC filing(s), each matching its summary page`);
+  for (const filing of filings) {
+    const role = filing.amendmentType === "none" ? "original" : `amendment ${filing.amendmentNumber}, ${FILING_ROLES[filing.amendmentType]}`;
+    const value = formatUsd(toUnits(filing.valueTotal) * BigInt(filing.valueMultiplier));
+    console.log(`  ${filing.formType.padEnd(8)} ${filing.accessionNumber} filed ${filing.filedAt.slice(0, 10)} (${role}): ${formatRows(filing.holdings.length)}, ${value}`);
   }
+  console.log(`  Reported holdings: ${formatRows(portfolio.rows)}, ${formatUsd(portfolio.valueUnits)} (${portfolio.filings.map((filing) => filing.accessionNumber).join(" + ")})`);
+  for (const warning of portfolio.warnings) console.log(`  Warning: ${warning}`);
   if (!db) {
     console.log("  Dry run: database not changed.");
     return;
   }
 
-  const result = await importFiling(db, source);
-  console.log(
-    result.action === "imported"
-      ? `  Imported ${result.rowsInserted} holdings (filing ${result.filingId}).`
-      : `  Already imported (filing ${result.filingId}); no rows added.`,
-  );
-  console.log(`  Verified ${result.rowsVerified} stored rows against the SEC filing.`);
+  const result = await importQuarter(db, filings);
+  for (const filing of result.filings) {
+    const action = filing.action === "imported" ? `imported ${formatRows(filing.rowsInserted)}` : "already imported, no rows added";
+    console.log(`  ${filing.accessionNumber}: ${action}; verified against the SEC filing`);
+  }
+  console.log("  Research views show exactly the reported holdings.");
 }
 
 async function main() {

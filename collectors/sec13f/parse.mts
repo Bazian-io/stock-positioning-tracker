@@ -28,7 +28,10 @@ export type OtherManager = {
 
 export type Filing13F = {
   accessionNumber: string;
-  formType: "13F-HR";
+  formType: "13F-HR" | "13F-HR/A";
+  // Form 13F amendments either restate the whole report or add new holdings entries to it.
+  amendmentType: "none" | "restatement" | "new_holdings";
+  amendmentNumber: number;
   cik: string;
   managerName: string;
   reportPeriod: string;
@@ -47,6 +50,11 @@ const INTEGER = /^\d{1,18}$/;
 const REPORT_TYPES: Record<string, Filing13F["reportType"]> = {
   "13F HOLDINGS REPORT": "holdings",
   "13F COMBINATION REPORT": "combination",
+};
+
+const AMENDMENT_TYPES: Record<string, Filing13F["amendmentType"]> = {
+  RESTATEMENT: "restatement",
+  "NEW HOLDINGS": "new_holdings",
 };
 
 const REPEATED_ELEMENTS = new Set([
@@ -136,11 +144,18 @@ export function parseFullSubmission(submissionText: string): Filing13F {
     if (type && xml) documents.set(type, xml);
   }
 
-  const submission = path(parser.parse(documents.get("13F-HR") ?? fail("Missing 13F-HR XML cover document (older text-format filings are not supported)")), "edgarSubmission");
+  const coverDocument = documents.get("13F-HR") ?? documents.get("13F-HR/A")
+    ?? fail("Missing 13F-HR XML cover document (older text-format filings are not supported)");
+  const submission = path(parser.parse(coverDocument), "edgarSubmission");
   const submissionType = text(submission, "headerData", "submissionType");
-  if (submissionType !== "13F-HR") fail(`Only original 13F-HR filings are supported, not ${submissionType}`);
+  if (submissionType !== "13F-HR" && submissionType !== "13F-HR/A") {
+    fail(`Only 13F-HR filings and their amendments are supported, not ${submissionType}`);
+  }
   const cover = path(submission, "formData", "coverPage");
   const summary = path(submission, "formData", "summaryPage");
+  const isAmendment = ["true", "1"].includes(text(cover, "isAmendment") ?? "");
+  if (isAmendment !== (submissionType === "13F-HR/A")) fail(`${submissionType} cover page has isAmendment=${isAmendment}`);
+  const amendmentTypeText = text(cover, "amendmentInfo", "amendmentType") ?? "";
 
   const [, month, day, year] = /^(\d{2})-(\d{2})-(\d{4})$/.exec(text(cover, "reportCalendarOrQuarter") ?? "")
     ?? fail("Invalid reportCalendarOrQuarter");
@@ -153,6 +168,10 @@ export function parseFullSubmission(submissionText: string): Filing13F {
   const filing: Filing13F = {
     accessionNumber,
     formType: submissionType,
+    amendmentType: isAmendment
+      ? AMENDMENT_TYPES[amendmentTypeText] ?? fail(`Unsupported amendment type: ${amendmentTypeText}`)
+      : "none",
+    amendmentNumber: isAmendment ? Number(matching(text(cover, "amendmentNo"), /^[1-9]\d{0,3}$/, "amendmentNo")) : 0,
     cik: matching(text(submission, "headerData", "filerInfo", "filer", "credentials", "cik"), /^\d{10}$/, "filer CIK"),
     managerName: text(cover, "filingManager", "name") ?? fail("Missing filing manager name"),
     reportPeriod: `${year}-${month}-${day}`,
