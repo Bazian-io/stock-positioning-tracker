@@ -9,9 +9,13 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:db": "node --test supabase/tests/*.test.mjs"
+    "test:db": "node --test supabase/tests/*.test.mjs",
+    "test:collectors": "node --test \"collectors/**/*.test.mts\"",
+    "collect:13f": "node --env-file-if-exists=.env.local collectors/sec13f/collect.mts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.117.3",
+    "fast-xml-parser": "5.11.2",
     "next": "16.4.3",
     "react": "19.3.1",
     "react-dom": "19.3.1"

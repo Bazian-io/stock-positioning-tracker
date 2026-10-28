@@ -1,0 +1,165 @@
+<SEC-DOCUMENT>0000000000-26-000001.txt : 20260814
+<SEC-HEADER>0000000000-26-000001.hdr.sgml : 20260814
+<ACCEPTANCE-DATETIME>20260814160504
+ACCESSION NUMBER:		0000000000-26-000001
+CONFORMED SUBMISSION TYPE:	13F-HR
+PUBLIC DOCUMENT COUNT:		2
+CONFORMED PERIOD OF REPORT:	20260630
+FILED AS OF DATE:		20260814
+
+FILER:
+
+	COMPANY DATA:
+		COMPANY CONFORMED NAME:			EXAMPLE CAPITAL MANAGEMENT LLC
+		CENTRAL INDEX KEY:			0000000001
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>13F-HR
+<SEQUENCE>1
+<FILENAME>primary_doc.xml
+<TEXT>
+<XML>
+<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns:ns1="http://www.sec.gov/edgar/common" xmlns="http://www.sec.gov/edgar/thirteenffiler">
+  <schemaVersion>X0202</schemaVersion>
+  <headerData>
+    <submissionType>13F-HR</submissionType>
+    <filerInfo>
+      <liveTestFlag>LIVE</liveTestFlag>
+      <flags/>
+      <filer>
+        <credentials>
+          <cik>0000000001</cik>
+          <ccc>XXXXXXXX</ccc>
+        </credentials>
+      </filer>
+      <periodOfReport>06-30-2026</periodOfReport>
+    </filerInfo>
+  </headerData>
+  <formData>
+    <coverPage>
+      <reportCalendarOrQuarter>06-30-2026</reportCalendarOrQuarter>
+      <isAmendment>false</isAmendment>
+      <filingManager>
+        <name>Example Capital Management LLC</name>
+        <address>
+          <ns1:street1>1 Example Street</ns1:street1>
+          <ns1:city>Example City</ns1:city>
+          <ns1:stateOrCountry>NE</ns1:stateOrCountry>
+          <ns1:zipCode>00000</ns1:zipCode>
+        </address>
+      </filingManager>
+      <reportType>13F HOLDINGS REPORT</reportType>
+      <form13FFileNumber>028-00000</form13FFileNumber>
+      <provideInfoForInstruction5>N</provideInfoForInstruction5>
+    </coverPage>
+    <summaryPage>
+      <otherIncludedManagersCount>2</otherIncludedManagersCount>
+      <tableEntryTotal>4</tableEntryTotal>
+      <tableValueTotal>4550</tableValueTotal>
+      <isConfidentialOmitted>true</isConfidentialOmitted>
+      <otherManagers2Info>
+        <otherManager2>
+          <sequenceNumber>1</sequenceNumber>
+          <otherManager>
+            <form13FFileNumber>28-00001</form13FFileNumber>
+            <name>Example Insurance &amp; Annuity Co</name>
+          </otherManager>
+        </otherManager2>
+        <otherManager2>
+          <sequenceNumber>2</sequenceNumber>
+          <otherManager>
+            <cik>0000000002</cik>
+            <form13FFileNumber>28-00002</form13FFileNumber>
+            <name>Example Re Corp</name>
+          </otherManager>
+        </otherManager2>
+      </otherManagers2Info>
+    </summaryPage>
+  </formData>
+</edgarSubmission>
+</XML>
+</TEXT>
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>INFORMATION TABLE
+<SEQUENCE>2
+<FILENAME>infotable.xml
+<DESCRIPTION>INFORMATION TABLE FOR FORM 13F
+<TEXT>
+<XML>
+<?xml version="1.0" encoding="UTF-8"?>
+<ns1:informationTable xmlns:ns1="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+  <ns1:infoTable>
+    <ns1:nameOfIssuer>SMITH &amp; JONES CO</ns1:nameOfIssuer>
+    <ns1:titleOfClass>COM</ns1:titleOfClass>
+    <ns1:cusip>98765X101</ns1:cusip>
+    <ns1:value>1000</ns1:value>
+    <ns1:shrsOrPrnAmt>
+      <ns1:sshPrnamt>50</ns1:sshPrnamt>
+      <ns1:sshPrnamtType>SH</ns1:sshPrnamtType>
+    </ns1:shrsOrPrnAmt>
+    <ns1:investmentDiscretion>SOLE</ns1:investmentDiscretion>
+    <ns1:votingAuthority>
+      <ns1:Sole>50</ns1:Sole>
+      <ns1:Shared>0</ns1:Shared>
+      <ns1:None>0</ns1:None>
+    </ns1:votingAuthority>
+  </ns1:infoTable>
+  <ns1:infoTable>
+    <ns1:nameOfIssuer>EXAMPLE CORP</ns1:nameOfIssuer>
+    <ns1:titleOfClass>CL A</ns1:titleOfClass>
+    <ns1:cusip>012345678</ns1:cusip>
+    <ns1:figi>BBG000000001</ns1:figi>
+    <ns1:value>2500</ns1:value>
+    <ns1:shrsOrPrnAmt>
+      <ns1:sshPrnamt>100</ns1:sshPrnamt>
+      <ns1:sshPrnamtType>SH</ns1:sshPrnamtType>
+    </ns1:shrsOrPrnAmt>
+    <ns1:investmentDiscretion>DFND</ns1:investmentDiscretion>
+    <ns1:otherManager>1, 2</ns1:otherManager>
+    <ns1:votingAuthority>
+      <ns1:Sole>0</ns1:Sole>
+      <ns1:Shared>100</ns1:Shared>
+      <ns1:None>0</ns1:None>
+    </ns1:votingAuthority>
+  </ns1:infoTable>
+  <ns1:infoTable>
+    <ns1:nameOfIssuer>EXAMPLE CORP</ns1:nameOfIssuer>
+    <ns1:titleOfClass>CL A</ns1:titleOfClass>
+    <ns1:cusip>012345678</ns1:cusip>
+    <ns1:value>300</ns1:value>
+    <ns1:shrsOrPrnAmt>
+      <ns1:sshPrnamt>10</ns1:sshPrnamt>
+      <ns1:sshPrnamtType>SH</ns1:sshPrnamtType>
+    </ns1:shrsOrPrnAmt>
+    <ns1:putCall>Put</ns1:putCall>
+    <ns1:investmentDiscretion>DFND</ns1:investmentDiscretion>
+    <ns1:otherManager>1</ns1:otherManager>
+    <ns1:votingAuthority>
+      <ns1:Sole>0</ns1:Sole>
+      <ns1:Shared>0</ns1:Shared>
+      <ns1:None>10</ns1:None>
+    </ns1:votingAuthority>
+  </ns1:infoTable>
+  <ns1:infoTable>
+    <ns1:nameOfIssuer>EXAMPLE CORP</ns1:nameOfIssuer>
+    <ns1:titleOfClass>NOTE 1.500% 3/1</ns1:titleOfClass>
+    <ns1:cusip>012345AB9</ns1:cusip>
+    <ns1:value>750</ns1:value>
+    <ns1:shrsOrPrnAmt>
+      <ns1:sshPrnamt>1000</ns1:sshPrnamt>
+      <ns1:sshPrnamtType>PRN</ns1:sshPrnamtType>
+    </ns1:shrsOrPrnAmt>
+    <ns1:investmentDiscretion>SOLE</ns1:investmentDiscretion>
+    <ns1:votingAuthority>
+      <ns1:Sole>0</ns1:Sole>
+      <ns1:Shared>0</ns1:Shared>
+      <ns1:None>0</ns1:None>
+    </ns1:votingAuthority>
+  </ns1:infoTable>
+</ns1:informationTable>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>
