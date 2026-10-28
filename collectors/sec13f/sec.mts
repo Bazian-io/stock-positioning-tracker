@@ -69,6 +69,21 @@ export function normalizeQuarter(quarter: string): string {
   throw new Error(`Invalid quarter: ${quarter}. Use a quarter-end date (2026-03-31) or a label (2026Q1).`);
 }
 
+// Every quarter-end date from one quarter through another, in order.
+export function quarterRange(from: string, to: string): string[] {
+  const first = normalizeQuarter(from);
+  const last = normalizeQuarter(to);
+  if (first > last) throw new Error(`Invalid quarter range: ${from} is after ${to}`);
+  const quarters: string[] = [];
+  for (let year = Number(first.slice(0, 4)); year <= Number(last.slice(0, 4)); year++) {
+    for (const end of QUARTER_ENDS) {
+      const quarter = `${year}-${end}`;
+      if (quarter >= first && quarter <= last) quarters.push(quarter);
+    }
+  }
+  return quarters;
+}
+
 function indexEntries(columns: IndexColumns): FilingIndexEntry[] {
   return columns.form.map((form, i) => ({
     accessionNumber: columns.accessionNumber[i],

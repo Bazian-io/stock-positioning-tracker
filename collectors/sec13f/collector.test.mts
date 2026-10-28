@@ -4,7 +4,7 @@ import { reportedPortfolio } from "./amendments.mts";
 import { amendmentText, newRows, sample, sampleRows, sourceFiling, variant } from "./fixtures/filings.mts";
 import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
 import {
-  createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, type SecClient,
+  createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, quarterRange, type SecClient,
 } from "./sec.mts";
 import { comparePortfolio, compareStored, filingRow, holdingRow, type FilingIds, type SourceFiling } from "./store.mts";
 
@@ -159,6 +159,16 @@ test("quarters can be given as quarter-end dates or labels", () => {
   assert.equal(normalizeQuarter("2025-q4"), "2025-12-31");
   assert.throws(() => normalizeQuarter("2026-03-30"), /Invalid quarter/);
   assert.throws(() => normalizeQuarter("2026Q5"), /Invalid quarter/);
+});
+
+test("quarter ranges include both ends, in order, across year boundaries", () => {
+  const fiveYears = quarterRange("2021Q3", "2026Q2");
+  assert.equal(fiveYears.length, 20);
+  assert.deepEqual(fiveYears.slice(0, 3), ["2021-09-30", "2021-12-31", "2022-03-31"]);
+  assert.equal(fiveYears.at(-1), "2026-06-30");
+  assert.deepEqual(quarterRange("2025-12-31", "2025Q4"), ["2025-12-31"]);
+  assert.throws(() => quarterRange("2026Q2", "2021Q3"), /2026Q2 is after 2021Q3/);
+  assert.throws(() => quarterRange("2021Q3", "2026-06-15"), /Invalid quarter/);
 });
 
 test("selects a quarter's original 13F-HR together with its amendments, oldest first", async () => {

@@ -19,6 +19,7 @@ Copy `.env.example` to `.env.local` (ignored by git) and fill in:
 npm run collect:13f -- --dry-run             # download and check only; no database changes
 npm run collect:13f                          # import Berkshire Hathaway's latest quarter
 npm run collect:13f -- --quarter 2026-03-31  # a specific quarter (or 2026Q1); repeat for several
+npm run collect:13f -- --from 2021Q3 --to 2026Q2  # every quarter in a range, oldest first
 npm run collect:13f -- --cik 1067983         # choose the manager by CIK
 npm run test:collectors                      # offline tests: synthetic filings, disposable database
 ```

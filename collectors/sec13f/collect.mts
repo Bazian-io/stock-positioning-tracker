@@ -1,12 +1,13 @@
 // Imports 13F-HR filings and their amendments from SEC EDGAR into Supabase, one quarter at a time:
 // the latest quarter, or selected ones.
-// Usage: npm run collect:13f -- [--cik 1067983] [--quarter 2026-03-31 | 2026Q1]... [--dry-run]
+// Usage: npm run collect:13f -- [--cik 1067983] [--quarter 2026-03-31 | 2026Q1]... [--from 2021Q3 --to 2026Q2] [--dry-run]
 import { parseArgs } from "node:util";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { reportedPortfolio } from "./amendments.mts";
 import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
 import {
-  createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, type FilingIndexEntry, type SecClient,
+  createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, quarterRange, type FilingIndexEntry,
+  type SecClient,
 } from "./sec.mts";
 import { connect, importQuarter, type SourceFiling } from "./store.mts";
 
@@ -77,11 +78,21 @@ async function main() {
     options: {
       cik: { type: "string", default: BERKSHIRE_HATHAWAY_CIK },
       quarter: { type: "string", multiple: true },
+      from: { type: "string" },
+      to: { type: "string" },
       "dry-run": { type: "boolean", default: false },
     },
   });
   const cik = normalizeCik(values.cik);
-  const quarters = values.quarter ? [...new Set(values.quarter.map(normalizeQuarter))] : [undefined];
+  if ((values.from === undefined) !== (values.to === undefined)) {
+    throw new Error("Use --from and --to together, e.g. --from 2021Q3 --to 2026Q2");
+  }
+  const selected = [
+    ...(values.from && values.to ? quarterRange(values.from, values.to) : []),
+    ...(values.quarter ?? []).map(normalizeQuarter),
+  ];
+  // Selected quarters run oldest first; with none selected, the latest quarter.
+  const quarters = selected.length > 0 ? [...new Set(selected)].sort() : [undefined];
   const sec = createSecClient(requireEnv("SEC_USER_AGENT"));
   let db: SupabaseClient | null = null;
   if (!values["dry-run"]) {
@@ -89,8 +100,9 @@ async function main() {
     if (new URL(supabaseUrl).protocol !== "https:") throw new Error("SUPABASE_URL must use https");
     db = connect(supabaseUrl, requireEnv("SUPABASE_SECRET_KEY"));
   }
-  // One quarter at a time; stops at the first failure. Completed quarters are skipped on re-runs.
+  // One quarter at a time; stops at the first failure. Completed filings are skipped on re-runs.
   for (const quarter of quarters) await collect(sec, cik, quarter, db);
+  if (quarters.length > 1) console.log(`Finished all ${quarters.length} quarters.`);
 }
 
 main().catch((error: unknown) => {
