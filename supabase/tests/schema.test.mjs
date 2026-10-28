@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
+
+const migrationsDir = new URL("../migrations/", import.meta.url);
+const migrations = (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
 
 let db;
 let accession = 0;
 let cik = 0;
 
-before(async () => {
-  db = new PGlite({ extensions: { btree_gist } });
+// A disposable database with Supabase's roles and the first `count` migrations applied.
+async function createDatabase(count = migrations.length) {
+  const database = new PGlite({ extensions: { btree_gist } });
   // Supabase provides these roles. Reproduce them only inside this disposable database.
-  await db.exec(`
+  await database.exec(`
     create role anon nologin;
     create role authenticated nologin;
     create role service_role nologin bypassrls;
@@ -19,11 +23,12 @@ before(async () => {
     alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
     alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
   `);
-  const migration = await readFile(
-    new URL("../migrations/20261028000000_initial_research_schema.sql", import.meta.url),
-    "utf8",
-  );
-  await db.exec(migration);
+  for (const name of migrations.slice(0, count)) await database.exec(await readFile(new URL(name, migrationsDir), "utf8"));
+  return database;
+}
+
+before(async () => {
+  db = await createDatabase();
 });
 
 beforeEach(async () => {
@@ -110,14 +115,15 @@ async function observation(overrides = {}) {
   });
 }
 
-test("migration creates exactly seven tables, all protected by RLS", async () => {
+test("migrations create the research tables, all protected by RLS", async () => {
   const result = await db.query(`
     select c.relname, c.relrowsecurity from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind = 'r' order by c.relname
   `);
   assert.deepEqual(result.rows.map((row) => row.relname), [
-    "collection_runs", "filings", "holdings", "investors", "securities", "security_identifiers", "short_interest",
+    "collection_runs", "filings", "holdings", "investor_ciks", "investors", "securities", "security_identifiers",
+    "short_interest",
   ]);
   assert.ok(result.rows.every((row) => row.relrowsecurity));
 });
@@ -314,5 +320,88 @@ test("public roles can read validated research but cannot write or access collec
       where n.nspname = 'research_private' and p.proname = 'guard_filing'`)).rows[0];
     assert.equal(privileges.view_write, false);
     assert.equal(privileges.helper_execute, false);
+  }
+});
+
+test("each investor's CIK is recorded, and a CIK belongs to one investor", async () => {
+  const manager = await investor();
+  const ciks = async (investorId) =>
+    (await db.query("select cik from public.investor_ciks where investor_id = $1 order by cik", [investorId])).rows.map((row) => row.cik);
+  assert.deepEqual(await ciks(manager.id), [manager.cik]);
+  await insert("investor_ciks", {
+    cik: "0000999999",
+    investor_id: manager.id,
+    entity_name: "Example former parent",
+    source_reference: "https://data.sec.gov/submissions/CIK0000999999.json",
+  });
+  await rejected("insert into public.investors (name, cik) values ('Another manager', '0000999999')", [], /already belongs to another investor/);
+  await rejected(`insert into public.investor_ciks (cik, investor_id, entity_name, source_reference)
+    values ($1, $2, 'Duplicate', 'Example')`, [manager.cik, (await investor()).id], /duplicate key/);
+  // Changing an investor's own CIK keeps the earlier one.
+  await db.query("update public.investors set cik = '0000888888' where id = $1", [manager.id]);
+  assert.deepEqual(await ciks(manager.id), ["0000888888", "0000999999", manager.cik].sort());
+});
+
+test("filings under an investor's former CIK join the same quarterly history", async () => {
+  const manager = await investor();
+  await insert("investor_ciks", {
+    cik: "0000777777",
+    investor_id: manager.id,
+    entity_name: "Example former parent",
+    source_reference: "https://data.sec.gov/submissions/CIK0000777777.json",
+  });
+  // The collector finds the investor through whichever CIK filed the report.
+  const owner = async (filerCik) =>
+    (await db.query("select investor_id from public.investor_ciks where cik = $1", [filerCik])).rows[0]?.investor_id;
+  await filing({ investor_id: await owner("0000777777"), report_period: "2024-06-30", filed_at: "2024-08-13T12:00:00Z" });
+  await filing({ investor_id: await owner(manager.cik), report_period: "2024-09-30", filed_at: "2024-11-13T12:00:00Z" });
+  const quarters = (await db.query(
+    "select investor_id, report_period::text from public.quarterly_portfolios order by report_period",
+  )).rows;
+  assert.deepEqual(quarters, [
+    { investor_id: manager.id, report_period: "2024-06-30" },
+    { investor_id: manager.id, report_period: "2024-09-30" },
+  ]);
+});
+
+test("public roles can read investor CIKs but not change them", async () => {
+  const manager = await investor();
+  for (const role of ["anon", "authenticated"]) {
+    await db.exec(`set local role ${role};`);
+    assert.equal((await db.query("select * from public.investor_ciks")).rows.length, 1);
+    await rejected(`insert into public.investor_ciks (cik, investor_id, entity_name, source_reference)
+      values ('0000666666', $1, 'Unauthorized', 'Example')`, [manager.id], /permission denied/);
+    await rejected("delete from public.investor_ciks", [], /permission denied/);
+  }
+});
+
+test("the CIK migration records existing investors without changing their data", async () => {
+  const database = await createDatabase(migrations.indexOf("20261028180000_investor_ciks.sql"));
+  try {
+    await database.exec(`
+      insert into public.investors (id, name, cik) values ('00000000-0000-0000-0000-000000000001', 'Existing manager', '0000000042');
+      insert into public.collection_runs (id, collector, provider) values ('00000000-0000-0000-0000-000000000002', 'sec13f', 'sec');
+      insert into public.filings (id, investor_id, collection_run_id, accession_number, report_period, filed_at, form_type,
+        report_type, reported_entry_count, reported_total_value, value_multiplier, source_url)
+      values ('00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002',
+        '0000000042-26-000001', '2026-06-30', '2026-08-01T12:00:00Z', '13F-HR', 'holdings', 0, 0, 1,
+        'https://www.sec.gov/Archives/edgar/data/42/000000004226000001/0000000042-26-000001.txt');
+      update public.filings set import_status = 'complete' where id = '00000000-0000-0000-0000-000000000003';
+    `);
+    const snapshot = async () => (await database.query(`select
+      (select jsonb_agg(i) from public.investors i) as investors,
+      (select jsonb_agg(f) from public.filings f) as filings,
+      (select jsonb_agg(r) from public.collection_runs r) as runs`)).rows[0];
+    const before = await snapshot();
+    await database.exec(await readFile(new URL("20261028180000_investor_ciks.sql", migrationsDir), "utf8"));
+    assert.deepEqual(await snapshot(), before);
+    assert.deepEqual((await database.query("select cik, investor_id, entity_name, source_reference from public.investor_ciks")).rows, [{
+      cik: "0000000042",
+      investor_id: "00000000-0000-0000-0000-000000000001",
+      entity_name: "Existing manager",
+      source_reference: "https://data.sec.gov/submissions/CIK0000000042.json",
+    }]);
+  } finally {
+    await database.close();
   }
 });

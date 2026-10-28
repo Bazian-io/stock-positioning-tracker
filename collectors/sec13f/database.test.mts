@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
@@ -26,7 +26,10 @@ before(async () => {
     alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
     alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
   `);
-  await db.exec(await readFile(new URL("../../supabase/migrations/20261028000000_initial_research_schema.sql", import.meta.url), "utf8"));
+  const migrations = new URL("../../supabase/migrations/", import.meta.url);
+  for (const name of (await readdir(migrations)).filter((file) => file.endsWith(".sql")).sort()) {
+    await db.exec(await readFile(new URL(name, migrations), "utf8"));
+  }
 });
 
 beforeEach(async () => {

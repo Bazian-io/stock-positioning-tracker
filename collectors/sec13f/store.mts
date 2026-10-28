@@ -185,17 +185,50 @@ async function readPortfolio(db: SupabaseClient, investorId: string, reportPerio
   return { filingIds: filings.map((row) => row.filing_id), summary };
 }
 
-async function ensureInvestor(db: SupabaseClient, source: SourceFiling): Promise<string> {
-  const existing = await must<{ id: string } | null>(
-    db.from("investors").select("id").eq("cik", source.cik).maybeSingle(),
-    "Look up investor",
+export type InvestorRecord = { id: string; name: string; ciks: string[] };
+
+// The investor that has filed under this CIK, with every CIK it has filed under (investor_ciks).
+export async function findInvestor(db: SupabaseClient, cik: string): Promise<InvestorRecord | null> {
+  const link = await must<{ investor_id: string } | null>(
+    db.from("investor_ciks").select("investor_id").eq("cik", cik).maybeSingle(),
+    "Look up CIK",
   );
-  if (existing) return existing.id;
-  const created = await must<{ id: string }>(
-    db.from("investors").insert({ name: source.managerName, cik: source.cik }).select("id").single(),
+  if (!link) return null;
+  const [investor, links] = await Promise.all([
+    must<{ id: string; name: string }>(db.from("investors").select("id, name").eq("id", link.investor_id).single(), "Read investor"),
+    must<{ cik: string }[]>(db.from("investor_ciks").select("cik").eq("investor_id", link.investor_id).order("cik"), "Read investor CIKs"),
+  ]);
+  return { ...investor, ciks: links.map((row) => row.cik) };
+}
+
+// Records another CIK an investor has filed under. A CIK can belong to one investor only.
+export async function linkCik(
+  db: SupabaseClient,
+  investorId: string,
+  cik: string,
+  entityName: string,
+  sourceReference: string,
+): Promise<"linked" | "already_linked"> {
+  const existing = await must<{ investor_id: string } | null>(
+    db.from("investor_ciks").select("investor_id").eq("cik", cik).maybeSingle(),
+    "Look up CIK",
+  );
+  if (existing && existing.investor_id !== investorId) throw new Error(`CIK ${cik} already belongs to another investor`);
+  if (existing) return "already_linked";
+  await must(
+    db.from("investor_ciks").insert({ cik, investor_id: investorId, entity_name: entityName, source_reference: sourceReference }),
+    "Link CIK",
+  );
+  return "linked";
+}
+
+// A new investor is added under the filing's CIK; the database also records it in investor_ciks.
+async function addInvestor(db: SupabaseClient, source: SourceFiling): Promise<InvestorRecord> {
+  const created = await must<{ id: string; name: string }>(
+    db.from("investors").insert({ name: source.managerName, cik: source.cik }).select("id, name").single(),
     "Add investor",
   );
-  return created.id;
+  return { ...created, ciks: [source.cik] };
 }
 
 // Follows the import protocol in supabase/README.md: pending filing, all source rows, then a
@@ -270,7 +303,12 @@ export async function importQuarter(db: SupabaseClient, filings: SourceFiling[])
     );
 
   try {
-    const investorId = await ensureInvestor(db, original);
+    const investor = (await findInvestor(db, original.cik)) ?? (await addInvestor(db, original));
+    const unlinked = [...new Set(filings.map((filing) => filing.cik))].filter((cik) => !investor.ciks.includes(cik));
+    if (unlinked.length > 0) {
+      throw new Error(`Filed under CIK ${unlinked.join(", ")}, which is not linked to ${investor.name}; link it first with npm run link:cik`);
+    }
+    const investorId = investor.id;
     const results: FilingResult[] = [];
     let originalFilingId: string | null = null;
     for (const filing of filings) {

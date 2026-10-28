@@ -1,7 +1,7 @@
 # Research database
 
-The initial migration creates seven tables and four read-only research views.
-It requires PostgreSQL 15 or newer and the standard Supabase `anon`,
+The migrations create eight tables and four read-only research views.
+They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 `authenticated`, and `service_role` roles. Authentication UI is not required.
 
 ## Tables
@@ -9,6 +9,7 @@ It requires PostgreSQL 15 or newer and the standard Supabase `anon`,
 | Table | Purpose |
 | --- | --- |
 | `investors` | Tracked filing managers, identified by zero-padded 10-digit CIKs. |
+| `investor_ciks` | Every CIK an investor has filed under, e.g. before and after a reorganization; each CIK belongs to one investor. |
 | `securities` | Stable internal identities for security/share classes and the short-interest watchlist flag. |
 | `security_identifiers` | Verified CUSIP, ticker, FIGI and provider-symbol mappings with validity periods. |
 | `filings` | SEC filing metadata, amendment links, source evidence, summary totals and validation state. |
@@ -18,6 +19,7 @@ It requires PostgreSQL 15 or newer and the standard Supabase `anon`,
 
 ```mermaid
 erDiagram
+    investors ||--|{ investor_ciks : "files under"
     investors ||--o{ filings : submits
     filings ||--o{ holdings : contains
     securities |o--o{ holdings : identifies
@@ -125,8 +127,9 @@ until a verified mapping is available.
 
 ## Access
 
-RLS is enabled on all seven tables. `anon` and `authenticated` can only read
-reference data, completed filings/holdings and accepted short-interest records.
+RLS is enabled on all eight tables. `anon` and `authenticated` can only read
+reference data (including investor CIKs), completed filings/holdings and accepted
+short-interest records.
 The views run with the caller's permissions. Public roles have no write grants,
 access to collection logs, sequence privileges or helper-function execution.
 Collectors use server-side `service_role` access; never expose that credential

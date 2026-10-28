@@ -4,7 +4,8 @@ import { reportedPortfolio } from "./amendments.mts";
 import { amendmentText, newRows, sample, sampleRows, sourceFiling, variant } from "./fixtures/filings.mts";
 import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
 import {
-  createSecClient, findFiling, fullSubmissionUrl, normalizeCik, normalizeQuarter, quarterRange, type SecClient,
+  cikHistory, createSecClient, findFiling, findQuarterFilings, fullSubmissionUrl, normalizeCik, normalizeQuarter,
+  quarterRange, type SecClient,
 } from "./sec.mts";
 import { comparePortfolio, compareStored, filingRow, holdingRow, type FilingIds, type SourceFiling } from "./store.mts";
 
@@ -29,11 +30,59 @@ function fakeSecIndex() {
           ["13F-HR/A", "0000000000-25-000004", "2025-03-31", "2025-08-14T20:10:02.000Z"],
           ["13F-HR", "0000000000-25-000002", "2025-03-31", "2025-05-15T20:06:43.000Z"],
         ]),
-        files: [{ name: "CIK0000000001-submissions-001.json" }],
+        files: [{ name: "CIK0000000001-submissions-001.json", filingTo: "2017-02-09" }],
       },
     },
     "https://data.sec.gov/submissions/CIK0000000001-submissions-001.json": columns([
       ["13F-HR", "0000000000-16-000001", "2015-12-31", "2016-02-16T21:00:00.000Z"],
+    ]),
+  };
+  const requested: string[] = [];
+  const sec: SecClient = {
+    async get(url) {
+      requested.push(url);
+      return { url, text: JSON.stringify(responses[url]), sha256: "" };
+    },
+  };
+  return { sec, requested };
+}
+
+// Stand-in for an investor that moved its 13F reporting to a new legal entity: the former CIK
+// (2) reported through Q2 2024, the current CIK (1) from Q3 2024 and also amended Q2 2024.
+function reorganizedSec(currentAlsoReports = false) {
+  const columns = (rows: [form: string, accession: string, reportDate: string, acceptedAt: string][]) => ({
+    form: rows.map((row) => row[0]),
+    accessionNumber: rows.map((row) => row[1]),
+    reportDate: rows.map((row) => row[2]),
+    acceptanceDateTime: rows.map((row) => row[3]),
+  });
+  const responses: Record<string, unknown> = {
+    "https://data.sec.gov/submissions/CIK0000000001.json": {
+      name: "EXAMPLE HOLDINGS INC",
+      formerNames: [{ name: "EXAMPLE FUNDING INC", to: "2024-10-01T00:00:00.000Z" }],
+      filings: {
+        recent: columns([
+          ["13F-HR", "0000000001-26-000002", "2026-06-30", "2026-08-07T16:00:00.000Z"],
+          ["13F-HR", "0000000001-24-000003", "2024-09-30", "2024-11-13T16:00:00.000Z"],
+          ["13F-HR/A", "0000000001-24-000002", "2024-06-30", "2024-10-15T16:00:00.000Z"],
+          ...(currentAlsoReports ? [["13F-HR", "0000000001-24-000001", "2024-06-30", "2024-08-14T16:00:00.000Z"] as [string, string, string, string]] : []),
+        ]),
+        files: [],
+      },
+    },
+    "https://data.sec.gov/submissions/CIK0000000002.json": {
+      name: "EXAMPLE FINANCE INC",
+      formerNames: [{ name: "EXAMPLE HOLDINGS INC", to: "2024-09-26T00:00:00.000Z" }],
+      filings: {
+        recent: columns([
+          ["13F-HR", "0000000002-24-000002", "2024-06-30", "2024-08-13T16:00:00.000Z"],
+          ["13F-HR", "0000000002-24-000001", "2024-03-31", "2024-05-10T16:00:00.000Z"],
+        ]),
+        files: [{ name: "CIK0000000002-submissions-001.json", filingTo: "2023-12-31" }],
+      },
+    },
+    "https://data.sec.gov/submissions/CIK0000000002-submissions-001.json": columns([
+      ["13F-HR", "0000000002-23-000004", "2023-09-30", "2023-11-13T16:00:00.000Z"],
     ]),
   };
   const requested: string[] = [];
@@ -174,17 +223,20 @@ test("quarter ranges include both ends, in order, across year boundaries", () =>
 test("selects a quarter's original 13F-HR together with its amendments, oldest first", async () => {
   const { sec, requested } = fakeSecIndex();
   const latest = await findFiling(sec, "0000000001", "13F-HR");
-  assert.equal(latest.accessionNumber, "0000000000-26-000008");
+  assert.equal(latest.original?.accessionNumber, "0000000000-26-000008");
   assert.deepEqual(latest.amendments, []);
   assert.deepEqual(await findFiling(sec, "0000000001", "13F-HR", "2026-03-31"), {
-    accessionNumber: "0000000000-26-000005",
-    form: "13F-HR",
-    acceptedAt: "2026-05-15T20:06:05.000Z",
-    reportDate: "2026-03-31",
+    original: {
+      cik: "0000000001",
+      accessionNumber: "0000000000-26-000005",
+      form: "13F-HR",
+      acceptedAt: "2026-05-15T20:06:05.000Z",
+      reportDate: "2026-03-31",
+    },
     amendments: [],
   });
   const amended = await findFiling(sec, "0000000001", "13F-HR", "2025-03-31");
-  assert.equal(amended.accessionNumber, "0000000000-25-000002");
+  assert.equal(amended.original?.accessionNumber, "0000000000-25-000002");
   assert.deepEqual(amended.amendments.map((entry) => [entry.form, entry.accessionNumber]), [
     ["13F-HR/A", "0000000000-25-000004"],
     ["13F-HR/A", "0000000000-25-000006"],
@@ -195,9 +247,46 @@ test("selects a quarter's original 13F-HR together with its amendments, oldest f
 
 test("historical quarters outside the recent index are found in older index pages", async () => {
   const { sec, requested } = fakeSecIndex();
-  assert.equal((await findFiling(sec, "0000000001", "13F-HR", "2015-12-31")).accessionNumber, "0000000000-16-000001");
+  assert.equal((await findFiling(sec, "0000000001", "13F-HR", "2015-12-31")).original?.accessionNumber, "0000000000-16-000001");
   assert.equal(requested.at(-1), "https://data.sec.gov/submissions/CIK0000000001-submissions-001.json");
-  await assert.rejects(findFiling(sec, "0000000001", "13F-HR", "2014-12-31"), /No 13F-HR filing for 2014-12-31/);
+  assert.deepEqual(await findFiling(sec, "0000000001", "13F-HR", "2014-12-31"), { original: null, amendments: [] });
+});
+
+test("index pages that end before a quarter are not read", async () => {
+  const { sec, requested } = fakeSecIndex();
+  assert.deepEqual(await findFiling(sec, "0000000001", "13F-HR", "2024-12-31"), { original: null, amendments: [] });
+  assert.deepEqual(requested, ["https://data.sec.gov/submissions/CIK0000000001.json"]);
+});
+
+test("a quarter is found under whichever of an investor's CIKs reported it", async () => {
+  const { sec } = reorganizedSec();
+  const ciks = ["0000000001", "0000000002"];
+  const latest = await findQuarterFilings(sec, ciks);
+  assert.deepEqual([latest.reportDate, latest.original.cik, latest.amendments.length], ["2026-06-30", "0000000001", 0]);
+  // The former CIK filed the original; the current one amended it after the reorganization.
+  const handover = await findQuarterFilings(sec, ciks, "2024-06-30");
+  assert.deepEqual([handover.original.cik, handover.original.accessionNumber], ["0000000002", "0000000002-24-000002"]);
+  assert.deepEqual(handover.amendments.map((entry) => [entry.cik, entry.accessionNumber]), [["0000000001", "0000000001-24-000002"]]);
+  assert.equal((await findQuarterFilings(sec, ciks, "2023-09-30")).original.accessionNumber, "0000000002-23-000004");
+  await assert.rejects(findQuarterFilings(sec, ciks, "2022-12-31"), /No 13F-HR filing for 2022-12-31 in SEC's index for CIK 0000000001, 0000000002/);
+});
+
+test("a quarter reported under two of an investor's CIKs is refused", async () => {
+  const { sec } = reorganizedSec(true);
+  await assert.rejects(
+    findQuarterFilings(sec, ["0000000001", "0000000002"], "2024-06-30"),
+    /More than one CIK filed a 13F-HR for 2024-06-30: 0000000001-24-000001 \(CIK 0000000001\), 0000000002-24-000002 \(CIK 0000000002\)/,
+  );
+});
+
+test("CIK history lists the entity's names and every quarter it reported", async () => {
+  const { sec } = reorganizedSec();
+  assert.deepEqual(await cikHistory(sec, "0000000002"), {
+    cik: "0000000002",
+    name: "EXAMPLE FINANCE INC",
+    formerNames: [{ name: "EXAMPLE HOLDINGS INC", until: "2024-09-26" }],
+    reportPeriods: ["2023-09-30", "2024-03-31", "2024-06-30"],
+  });
 });
 
 test("new-holdings amendments add their rows to the original report", () => {

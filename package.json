@@ -12,7 +12,8 @@
     "test:db": "node --test supabase/tests/*.test.mjs",
     "test:collectors": "node --test \"collectors/**/*.test.mts\"",
     "test:web": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.mts\"",
-    "collect:13f": "node --env-file-if-exists=.env.local collectors/sec13f/collect.mts"
+    "collect:13f": "node --env-file-if-exists=.env.local collectors/sec13f/collect.mts",
+    "link:cik": "node --env-file-if-exists=.env.local collectors/sec13f/link-cik.mts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.3",
