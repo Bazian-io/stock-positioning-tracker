@@ -13,6 +13,8 @@ next-env.d.ts
 .env*
 !.env.example
 /.vercel/
+/supabase/.temp/
+/supabase/.branches/
 
 # Local logs and operating-system files
 *.log
