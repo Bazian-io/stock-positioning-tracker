@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test:db": "node --test supabase/tests/*.test.mjs",
     "test:collectors": "node --test \"collectors/**/*.test.mts\"",
+    "test:web": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.mts\"",
     "collect:13f": "node --env-file-if-exists=.env.local collectors/sec13f/collect.mts"
   },
   "dependencies": {
