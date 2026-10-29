@@ -140,6 +140,27 @@ identifier's validity. `holdings.security_id` is not filled in, so nothing has t
 re-mapped after an import or a corrected identifier. An index on
 `holdings.reported_cusip` keeps these lookups direct.
 
+Holdings under one of a stock's CUSIPs in a quarter outside every validity period
+of that CUSIP are not counted as the stock; stock pages show the quarter as
+"unclear" instead of as a zero. A CUSIP that filers mistyped, or an earlier CUSIP
+replaced one-for-one in a corporate action, is recorded as a further CUSIP
+identifier of the stock, valid only for the period it identified the stock (see
+[collectors/README.md](../collectors/README.md#mistyped-cusips-earlier-cusips-and-start-dates)).
+
+## Backups
+
+```sh
+npm run backup:db -- --label before-some-change
+```
+
+Reads every row of the eight tables through the Supabase CLI (it must be logged in
+and linked to this project; the command refuses to run if the linked project is
+not the one in `SUPABASE_URL`) and saves them, with the list of applied
+migrations, to `~/Backups/stock-positioning-tracker/<date>-<time>-<label>/`. It
+then restores the backup into a local in-memory database built from the
+migrations and checks that every table matches the live database exactly. Make a
+backup before every approved write.
+
 ## Access
 
 RLS is enabled on all eight tables. `anon` and `authenticated` can only read

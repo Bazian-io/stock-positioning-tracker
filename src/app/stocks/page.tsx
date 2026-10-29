@@ -1,28 +1,39 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import styles from "@/components/dashboard/dashboard.module.css";
+import { formatNumber } from "@/lib/portfolio";
 import { EXCHANGE_NAMES } from "@/lib/stock";
-import { getStocks } from "@/lib/stock-data";
+import { getStock, getStockPage } from "@/lib/stock-data";
 
 export const metadata: Metadata = {
   title: "Stocks",
   description: "Search stocks and see which tracked institutional investors report holding them.",
 };
 
-// The stocks we can match to reported holdings, with search by ticker, company name or CUSIP.
+const STOCKS_PER_PAGE = 50;
+
+// The stocks we can match to reported holdings, a page at a time, with search by ticker, company name
+// or CUSIP.
 export default async function StocksPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const { q } = await searchParams;
+  const { q, page } = await searchParams;
   const query = typeof q === "string" ? q.trim() : "";
-  const stocks = await getStocks();
-  const needle = query.toUpperCase();
+  const pageNumber = typeof page === "string" && /^[1-9]\d{0,5}$/.test(page) ? Number(page) : 1;
   // An exact ticker goes straight to its page.
-  const exact = stocks.find((stock) => stock.ticker === needle.replace(/[./]/g, "-"));
-  if (exact) redirect(`/stocks/${encodeURIComponent(exact.ticker)}`);
-  const matches = query
-    ? stocks.filter((stock) => stock.ticker.includes(needle) || stock.name.toUpperCase().includes(needle)
-      || stock.cusips.some((period) => period.cusip === needle))
-    : stocks;
+  const ticker = query.toUpperCase().replace(/[./]/g, "-");
+  if (/^[A-Z0-9-]{1,10}$/.test(ticker) && (await getStock(ticker))) redirect(`/stocks/${encodeURIComponent(ticker)}`);
+  const { stocks, total } = await getStockPage(query, (pageNumber - 1) * STOCKS_PER_PAGE, STOCKS_PER_PAGE);
+  if (stocks.length === 0 && pageNumber > 1) notFound();
+
+  // Page links keep the search.
+  const pageHref = (number: number) => {
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (number > 1) params.set("page", String(number));
+    return params.size > 0 ? `/stocks?${params}` : "/stocks";
+  };
+  const pageCount = Math.ceil(total / STOCKS_PER_PAGE);
+  const first = (pageNumber - 1) * STOCKS_PER_PAGE + 1;
 
   return (
     <main className={styles.page}>
@@ -46,7 +57,7 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
               Each share class has its own page.
             </p>
           </div>
-          <p className={styles.cardMeta}>{matches.length === 1 ? "1 stock" : `${matches.length} stocks`}</p>
+          <p className={styles.cardMeta}>{total === 1 ? "1 stock" : `${formatNumber(total)} stocks`}</p>
         </div>
         <form className={styles.search} action="/stocks" role="search">
           <label htmlFor="stock-search" className={styles.visuallyHidden}>
@@ -64,7 +75,7 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
             Search
           </button>
         </form>
-        {matches.length === 0 ? (
+        {stocks.length === 0 ? (
           <p className={styles.cardSubtitle}>
             No stock matches “{query}”. <Link href="/stocks">Show all stocks</Link>
           </p>
@@ -81,7 +92,7 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
                 </tr>
               </thead>
               <tbody>
-                {matches.map((stock) => (
+                {stocks.map((stock) => (
                   <tr key={stock.securityId}>
                     <th scope="row">
                       <Link href={`/stocks/${encodeURIComponent(stock.ticker)}`} className={styles.issuer}>
@@ -101,6 +112,23 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
               </tbody>
             </table>
           </div>
+        )}
+        {pageCount > 1 && (
+          <nav className={styles.tableLinks} aria-label="Stock list pages">
+            <span className={styles.secondary}>
+              Stocks {formatNumber(first)}–{formatNumber(first + stocks.length - 1)} of {formatNumber(total)}
+            </span>
+            {pageNumber > 1 && (
+              <Link href={pageHref(pageNumber - 1)} className={styles.tableToggle}>
+                ← Previous
+              </Link>
+            )}
+            {pageNumber < pageCount && (
+              <Link href={pageHref(pageNumber + 1)} className={styles.tableToggle}>
+                Next →
+              </Link>
+            )}
+          </nav>
         )}
       </section>
     </main>

@@ -100,9 +100,18 @@ export type FilingEvidence = { firstPeriod: string; firstSourceUrl: string; late
 
 export type Evidence = { cusip: string; ticker: string; figi: FigiListing | null; sec: SecListing | null; filings: FilingEvidence | null };
 
+export type PlannedIdentifier = {
+  identifier_type: string;
+  identifier_value: string;
+  namespace: string;
+  valid_from: string;
+  valid_to?: string; // Exclusive; open-ended when absent.
+  source_reference: string;
+};
+
 export type PlannedSecurity = {
   security: { issuer_name: string; share_class: string | null; security_type: string };
-  identifiers: { identifier_type: string; identifier_value: string; namespace: string; valid_from: string; source_reference: string }[];
+  identifiers: PlannedIdentifier[];
 };
 
 // The rows to add, or the reasons the sources do not support the mapping. The CUSIP applies from the
@@ -150,4 +159,115 @@ export function markTickerConflicts(candidates: Candidate[], recordedTickers: Se
     else if (others.length > 0) candidate.problems.push(`CUSIPs ${[candidate.cusip, ...others].join(", ")} all map to ${candidate.ticker}`);
   }
   for (const candidate of planned) if (candidate.problems.length > 0) candidate.plan = null;
+}
+
+// The day after a date: the exclusive end of a validity window that includes that date.
+export function dayAfter(date: string): string {
+  const next = new Date(`${date}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
+// A CUSIP that filers mistyped for a stock (Berkshire filed Nu Holdings' G6683N103 as G6693N103 for
+// four quarters), recorded as an extra CUSIP of the stock for exactly the quarters filings used it.
+// It must not be a security OpenFIGI knows, listed or delisted, and every name filers reported under it
+// must match the stock's.
+export function planAlias(
+  alias: string,
+  stockName: string,
+  openFigiResult: unknown,
+  filings: FilingEvidence | null,
+): { identifier: PlannedIdentifier | null; problems: string[] } {
+  const problems: string[] = [];
+  if (!/^[0-9A-Z*@#]{9}$/.test(alias)) problems.push(`${alias} is not a 9-character CUSIP`);
+  const known = (openFigiResult as { data?: { name?: string }[] } | null)?.data ?? [];
+  if (known.length > 0) problems.push(`OpenFIGI knows ${alias} as ${known[0].name}: it is a real security, not a typo`);
+  if (!filings) problems.push(`No tracked filing reports CUSIP ${alias}`);
+  for (const name of filings?.reportedNames ?? []) {
+    if (!sameCompany(name, stockName)) problems.push(`Filers reported ${alias} as "${name}", which does not match ${stockName}`);
+  }
+  if (problems.length > 0 || !filings) return { identifier: null, problems };
+  return {
+    problems,
+    identifier: {
+      identifier_type: "cusip",
+      identifier_value: alias,
+      namespace: "",
+      valid_from: filings.firstPeriod,
+      valid_to: dayAfter(filings.latestPeriod),
+      source_reference: filings.firstSourceUrl,
+    },
+  };
+}
+
+// A recorded CUSIP's start date is the earliest quarter our filings reported it when it was added. Once
+// older quarters are imported, filings may report it earlier; its start then moves back to that quarter,
+// with that filing as evidence, as long as every name filers used matches the stock. A CUSIP recorded
+// more than once (for different periods) is left for a person.
+export function planEarlierStart(
+  recorded: { validFrom: string; recordedTimes: number },
+  stockName: string,
+  filings: FilingEvidence | null,
+): { validFrom: string; sourceReference: string } | { problem: string } | null {
+  if (!filings || filings.firstPeriod >= recorded.validFrom) return null;
+  if (recorded.recordedTimes > 1) return { problem: "the CUSIP is recorded for more than one period" };
+  const mismatch = filings.reportedNames.find((name) => !sameCompany(name, stockName));
+  if (mismatch) return { problem: `filers reported it as "${mismatch}", which does not match ${stockName}` };
+  return { validFrom: filings.firstPeriod, sourceReference: filings.firstSourceUrl };
+}
+
+// One investor's shares under the old CUSIP in the last quarter it was reported, and of the stock in the
+// next quarter.
+export type Continuity = { investor: string; before: number; after: number };
+
+// An earlier CUSIP of a stock, replaced in a corporate action that converted it one-for-one (Liberty
+// Media's Liberty Live tracking stock into Liberty Live Holdings on 15 December 2025): recorded as a CUSIP
+// of the stock from the earliest quarter our filings report it until the conversion date. It must be a
+// real security that is no longer listed, the conversion must have an official source, and at least
+// one investor's share count must carry over unchanged, which shows the conversion was one-for-one.
+// Conversions at other ratios are not linked: their share counts are not comparable.
+export function planPredecessor(input: {
+  cusip: string;
+  stockName: string;
+  stockCusips: { cusip: string; validFrom: string; validTo: string | null }[];
+  listed: FigiListing | null; // OpenFIGI's current US listing of the old CUSIP.
+  known: unknown; // OpenFIGI's result including delisted securities.
+  filings: FilingEvidence | null;
+  until: string; // The conversion date; the old CUSIP identifies the stock before it.
+  source: string; // An official record of the conversion.
+  continuity: Continuity[];
+}): { identifier: PlannedIdentifier | null; problems: string[] } {
+  const { cusip, stockName, stockCusips, listed, known, filings, until, source, continuity } = input;
+  const problems: string[] = [];
+  if (!isValidCusip(cusip)) problems.push(`${cusip} is not a valid CUSIP`);
+  const record = (known as { data?: { name?: string }[] } | null)?.data ?? [];
+  if (record.length === 0) problems.push(`OpenFIGI does not know ${cusip} as a security`);
+  if (listed) problems.push(`${cusip} is still listed (${listed.ticker}); only a CUSIP that is no longer listed can be a predecessor`);
+  if (!/^https:\/\/\S+$/.test(source)) problems.push("The source must be the https address of an official record, such as the company's release or SEC filing");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until) || Number.isNaN(Date.parse(until))) problems.push(`${until} is not a date (YYYY-MM-DD)`);
+  if (!filings) problems.push(`No tracked filing reports CUSIP ${cusip}`);
+  else {
+    if (filings.latestPeriod >= until) problems.push(`Filings report ${cusip} for ${filings.latestPeriod}, on or after the conversion date ${until}`);
+    for (const name of filings.reportedNames) {
+      if (!sameCompany(name, stockName)) problems.push(`Filers reported ${cusip} as "${name}", which does not match ${stockName}`);
+    }
+    const overlapping = stockCusips.filter((window) => window.validFrom < until && (window.validTo === null || window.validTo > filings.firstPeriod));
+    for (const window of overlapping) problems.push(`The stock's CUSIP ${window.cusip} already applies from ${window.validFrom}, before ${until}`);
+  }
+  if (continuity.length === 0) problems.push("No investor reported both the old CUSIP's last quarter and the next quarter, so the conversion cannot be checked");
+  else if (!continuity.some((row) => row.before === row.after)) {
+    problems.push(`No investor's share count carried over unchanged (${continuity.map((row) => `${row.investor}: ${row.before} → ${row.after}`).join(", ")}); the conversion may not be one-for-one`);
+  }
+  if (problems.length > 0 || !filings) return { identifier: null, problems };
+  return {
+    problems,
+    identifier: {
+      identifier_type: "cusip",
+      identifier_value: cusip,
+      namespace: "",
+      valid_from: filings.firstPeriod,
+      valid_to: until,
+      source_reference: source,
+    },
+  };
 }

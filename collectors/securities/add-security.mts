@@ -1,109 +1,23 @@
 // Adds stocks to the research database: a securities row with its CUSIP and ticker for each, after
 // checking OpenFIGI, SEC's company ticker file and our filings agree. Stock pages then find each
-// stock's holdings by CUSIP.
+// stock's holdings by CUSIP. Also records CUSIPs filers mistyped for a stock, earlier CUSIPs replaced
+// one-for-one in a corporate action, and moves CUSIP start dates back when older filings report them.
 // Usage: npm run add:security -- --cusip 037833100 --ticker AAPL [--share-class "Class A"] [--dry-run]
 //        npm run add:security -- --investor berkshire-hathaway [--top 500] [--dry-run]
+//        npm run add:security -- --alias G6693N103 --ticker NU [--dry-run]
+//        npm run add:security -- --predecessor 531229748 --ticker LLYVA --until 2025-12-15 --source <official URL> [--dry-run]
+//        npm run add:security -- --extend-windows [--dry-run]
 import { parseArgs } from "node:util";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createSecClient } from "../sec13f/sec.mts";
+import { nextQuarter } from "../../src/lib/stock.ts";
 import { connect } from "../sec13f/store.mts";
 import {
-  markTickerConflicts, normalizeTicker, OPENFIGI_URL, openFigiJob, planSecurity, sameCompany, SEC_TICKERS_URL, secListing, shareClassOf, usListing,
-  type Candidate, type FilingEvidence, type PlannedSecurity,
+  markTickerConflicts, normalizeTicker, planAlias, planEarlierStart, planPredecessor, planSecurity, sameCompany, secListing, shareClassOf,
+  usListing, type Candidate, type Continuity, type PlannedSecurity,
 } from "./identify.mts";
-
-const PAGE_SIZE = 1000; // Supabase's default maximum rows per API response.
-// OpenFIGI without an API key: 25 requests a minute, 10 identifiers per request.
-const OPENFIGI_BATCH = 10;
-const OPENFIGI_SPACING_MS = 2_500;
-
-function requireEnv(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is not set. Copy .env.example to .env.local and fill it in.`);
-  return value;
-}
-
-// supabase-js reports failures in the result instead of throwing.
-async function must<T>(request: PromiseLike<{ data: T | null; error: { message: string } | null }>, action: string) {
-  const { data, error } = await request;
-  if (error) throw new Error(`${action}: ${error.message}`);
-  return data as T;
-}
-
-async function loadAll<T>(page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>, action: string) {
-  const rows: T[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const data = await must<T[]>(page(from, from + PAGE_SIZE - 1), action);
-    rows.push(...data);
-    if (data.length < PAGE_SIZE) return rows;
-  }
-}
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// OpenFIGI's result for each CUSIP, in order. Requests are spaced to stay within the rate limit; a
-// rate-limited request waits a minute and is retried.
-async function openFigi(cusips: string[]): Promise<unknown[]> {
-  const results: unknown[] = [];
-  for (let i = 0; i < cusips.length; i += OPENFIGI_BATCH) {
-    if (i > 0) await wait(OPENFIGI_SPACING_MS);
-    const jobs = cusips.slice(i, i + OPENFIGI_BATCH).map(openFigiJob);
-    for (let attempt = 1; ; attempt++) {
-      const response = await fetch(OPENFIGI_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(jobs),
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (response.status === 429 && attempt < 4) {
-        await wait(60_000);
-        continue;
-      }
-      if (!response.ok) throw new Error(`OpenFIGI returned HTTP ${response.status}`);
-      results.push(...(await response.json() as unknown[]));
-      break;
-    }
-  }
-  return results;
-}
-
-// Where our filings report each CUSIP: the quarters, the names filers used, and the earliest filing as
-// evidence.
-async function filingEvidence(db: SupabaseClient, cusips: string[]): Promise<Map<string, FilingEvidence>> {
-  type Row = { reported_cusip: string; report_period: string; reported_issuer: string; reported_class: string | null; filing_id: string };
-  const rows: Row[] = [];
-  for (let i = 0; i < cusips.length; i += 100) {
-    rows.push(...await loadAll<Row>((from, to) => db.from("portfolio_holdings")
-      .select("reported_cusip, report_period, reported_issuer, reported_class, filing_id")
-      .in("reported_cusip", cusips.slice(i, i + 100))
-      .order("report_period").order("filed_at").order("filing_id").order("source_row")
-      .range(from, to), "Read holdings"));
-  }
-  const firstFilings = [...new Set(cusips.map((cusip) => rows.find((row) => row.reported_cusip === cusip)?.filing_id).filter((id) => id !== undefined))];
-  const filings = await must<{ id: string; source_url: string }[]>(
-    db.from("filings").select("id, source_url").in("id", firstFilings),
-    "Read filings",
-  );
-  const evidence = new Map<string, FilingEvidence>();
-  for (const cusip of cusips) {
-    const reported = rows.filter((row) => row.reported_cusip === cusip);
-    const sourceUrl = filings.find((filing) => filing.id === reported[0]?.filing_id)?.source_url;
-    if (!sourceUrl) continue;
-    evidence.set(cusip, {
-      firstPeriod: reported[0].report_period,
-      firstSourceUrl: sourceUrl,
-      latestPeriod: reported[reported.length - 1].report_period,
-      reportedNames: [...new Set(reported.map((row) => [row.reported_issuer, row.reported_class].filter(Boolean).join(" ")))],
-    });
-  }
-  return evidence;
-}
-
-async function secTickers() {
-  return JSON.parse((await createSecClient(requireEnv("SEC_USER_AGENT")).get(SEC_TICKERS_URL)).text);
-}
-
-const today = () => new Date().toISOString().slice(0, 10);
+import {
+  filingEvidence, loadAll, must, OPENFIGI_BATCH, OPENFIGI_SPACING_MS, openFigi, PAGE_SIZE, requireEnv, secTickers, today,
+} from "./sources.mts";
 
 async function insertSecurity(db: SupabaseClient, plan: PlannedSecurity): Promise<string> {
   const security = await must<{ id: string }>(db.from("securities").insert(plan.security).select("id").single(), "Add security");
@@ -234,6 +148,164 @@ async function addInvestorStocks(db: SupabaseClient, slug: string, top: number |
   console.log(`\nAdded ${plans.length} stocks.`);
 }
 
+// A CUSIP filers mistyped for a stock, recorded as an extra CUSIP of the stock for the quarters they used it.
+async function addAlias(db: SupabaseClient, alias: string, ticker: string, dryRun: boolean) {
+  const [tickerRow] = await must<{ security_id: string }[]>(
+    db.from("security_identifiers").select("security_id").eq("identifier_type", "ticker").eq("identifier_value", ticker)
+      .lte("valid_from", today()).or(`valid_to.is.null,valid_to.gt.${today()}`),
+    "Look up ticker",
+  );
+  if (!tickerRow) throw new Error(`No stock has the ticker ${ticker}.`);
+  const existing = await must<{ security_id: string }[]>(
+    db.from("security_identifiers").select("security_id").eq("identifier_type", "cusip").eq("identifier_value", alias),
+    "Look up CUSIP",
+  );
+  if (existing.length > 0) {
+    console.log(`Already recorded: cusip ${alias} (security ${existing[0].security_id}). Nothing changed.`);
+    return;
+  }
+  const security = await must<{ issuer_name: string }>(
+    db.from("securities").select("issuer_name").eq("id", tickerRow.security_id).single(),
+    "Read security",
+  );
+  const [figiResult] = await openFigi([alias], { includeUnlisted: true });
+  const filings = (await filingEvidence(db, [alias])).get(alias) ?? null;
+  const known = (figiResult as { data?: { name?: string }[] } | null)?.data ?? [];
+  console.log(`CUSIP ${alias} for ${ticker} (${security.issuer_name})`);
+  console.log(`  OpenFIGI: ${known.length > 0 ? `known as ${known[0].name}` : "not a known security, listed or delisted"}`);
+  console.log(`  Filings:  ${filings ? `reported ${filings.firstPeriod} to ${filings.latestPeriod} as ${filings.reportedNames.join("; ")}` : "none report this CUSIP"}`);
+
+  const { identifier, problems } = planAlias(alias, security.issuer_name, figiResult, filings);
+  if (!identifier) throw new Error(`Not recording ${alias}:\n- ${problems.join("\n- ")}`);
+  console.log(`  cusip  ${alias} for ${ticker}, from ${identifier.valid_from} until ${identifier.valid_to} (${identifier.source_reference})`);
+  if (dryRun) {
+    console.log("Dry run: database not changed.");
+    return;
+  }
+  await must(db.from("security_identifiers").insert({ ...identifier, security_id: tickerRow.security_id }), "Add CUSIP");
+  console.log(`Recorded ${alias} for ${ticker}.`);
+}
+
+// An earlier CUSIP of a stock, replaced one-for-one in a corporate action, recorded as a CUSIP of the
+// stock until the conversion date.
+async function addPredecessor(db: SupabaseClient, cusip: string, ticker: string, until: string, source: string, dryRun: boolean) {
+  const [tickerRow] = await must<{ security_id: string }[]>(
+    db.from("security_identifiers").select("security_id").eq("identifier_type", "ticker").eq("identifier_value", ticker)
+      .lte("valid_from", today()).or(`valid_to.is.null,valid_to.gt.${today()}`),
+    "Look up ticker",
+  );
+  if (!tickerRow) throw new Error(`No stock has the ticker ${ticker}.`);
+  const existing = await must<{ security_id: string }[]>(
+    db.from("security_identifiers").select("security_id").eq("identifier_type", "cusip").eq("identifier_value", cusip),
+    "Look up CUSIP",
+  );
+  if (existing.length > 0) {
+    console.log(`Already recorded: cusip ${cusip} (security ${existing[0].security_id}). Nothing changed.`);
+    return;
+  }
+  const [security, stockCusips] = await Promise.all([
+    must<{ issuer_name: string }>(db.from("securities").select("issuer_name").eq("id", tickerRow.security_id).single(), "Read security"),
+    must<{ identifier_value: string; valid_from: string; valid_to: string | null }[]>(
+      db.from("security_identifiers").select("identifier_value, valid_from, valid_to").eq("security_id", tickerRow.security_id).eq("identifier_type", "cusip"),
+      "Read the stock's CUSIPs",
+    ),
+  ]);
+  const [listedResult] = await openFigi([cusip]);
+  const [knownResult] = await openFigi([cusip], { includeUnlisted: true });
+  const filings = (await filingEvidence(db, [cusip])).get(cusip) ?? null;
+
+  // Each investor's shares under the old CUSIP in its last quarter, and of the stock in the next quarter.
+  const continuity: Continuity[] = [];
+  if (filings) {
+    const last = filings.latestPeriod;
+    const next = nextQuarter(last);
+    const current = stockCusips.filter((row) => row.valid_from <= next && (row.valid_to === null || next < row.valid_to)).map((row) => row.identifier_value);
+    const [positions, reports, investors] = await Promise.all([
+      must<{ investor_id: string; report_period: string; reported_cusip: string; quantity: string }[]>(
+        db.from("portfolio_positions").select("investor_id, report_period, reported_cusip, quantity::text")
+          .in("reported_cusip", [cusip, ...current]).in("report_period", [last, next]).eq("position_type", "long").eq("quantity_type", "SH"),
+        "Read positions",
+      ),
+      must<{ investor_id: string }[]>(db.from("quarterly_portfolios").select("investor_id").eq("report_period", next), "Read reports"),
+      must<{ id: string; slug: string }[]>(db.from("investors").select("id, slug"), "Read investors"),
+    ]);
+    const shares = (investorId: string, period: string, cusips: string[]) => positions
+      .filter((row) => row.investor_id === investorId && row.report_period === period && cusips.includes(row.reported_cusip))
+      .reduce((sum, row) => sum + Number(row.quantity), 0);
+    for (const investorId of new Set(positions.filter((row) => row.reported_cusip === cusip).map((row) => row.investor_id))) {
+      if (!reports.some((row) => row.investor_id === investorId)) continue;
+      continuity.push({
+        investor: investors.find((row) => row.id === investorId)?.slug ?? investorId,
+        before: shares(investorId, last, [cusip]),
+        after: shares(investorId, next, current),
+      });
+    }
+  }
+
+  const known = (knownResult as { data?: { name?: string }[] } | null)?.data ?? [];
+  const listed = usListing(listedResult);
+  console.log(`CUSIP ${cusip} as an earlier CUSIP of ${ticker} (${security.issuer_name}), until ${until}`);
+  console.log(`  OpenFIGI: ${known.length > 0 ? `known as ${known[0].name}` : "not a known security"}${listed ? `, still listed as ${listed.ticker}` : ", no longer listed"}`);
+  console.log(`  Filings:  ${filings ? `reported ${filings.firstPeriod} to ${filings.latestPeriod} as ${filings.reportedNames.join("; ")}` : "none report this CUSIP"}`);
+  for (const row of continuity) {
+    console.log(`  Shares:   ${row.investor} ${row.before} under ${cusip} in ${filings?.latestPeriod}, ${row.after} of ${ticker} in the next quarter${row.before === row.after ? " (unchanged)" : ""}`);
+  }
+  console.log(`  Source:   ${source}`);
+
+  const { identifier, problems } = planPredecessor({
+    cusip,
+    stockName: security.issuer_name,
+    stockCusips: stockCusips.map((row) => ({ cusip: row.identifier_value, validFrom: row.valid_from, validTo: row.valid_to })),
+    listed,
+    known: knownResult,
+    filings,
+    until,
+    source,
+    continuity,
+  });
+  if (!identifier) throw new Error(`Not recording ${cusip}:\n- ${problems.join("\n- ")}`);
+  console.log(`  cusip  ${cusip} for ${ticker}, from ${identifier.valid_from} until ${identifier.valid_to}`);
+  if (dryRun) {
+    console.log("Dry run: database not changed.");
+    return;
+  }
+  await must(db.from("security_identifiers").insert({ ...identifier, security_id: tickerRow.security_id }), "Add CUSIP");
+  console.log(`Recorded ${cusip} as an earlier CUSIP of ${ticker}.`);
+}
+
+// Moves recorded CUSIPs' start dates back to the earliest quarter our filings report them, after older
+// quarters have been imported.
+async function extendWindows(db: SupabaseClient, dryRun: boolean) {
+  const [identifiers, securities] = await Promise.all([
+    loadAll<{ id: string; security_id: string; identifier_value: string; valid_from: string }>((from, to) => db.from("security_identifiers")
+      .select("id, security_id, identifier_value, valid_from").eq("identifier_type", "cusip").order("id").range(from, to), "Read CUSIPs"),
+    loadAll<{ id: string; issuer_name: string }>((from, to) => db.from("securities").select("id, issuer_name").order("id").range(from, to), "Read securities"),
+  ]);
+  const values = [...new Set(identifiers.map((row) => row.identifier_value))];
+  console.log(`Checking ${values.length} recorded CUSIPs against our filings…`);
+  const evidence = await filingEvidence(db, values);
+  const moves: { id: string; cusip: string; from: string; validFrom: string; sourceReference: string }[] = [];
+  const problems: string[] = [];
+  for (const row of identifiers) {
+    const name = securities.find((security) => security.id === row.security_id)?.issuer_name ?? "";
+    const recordedTimes = identifiers.filter((other) => other.identifier_value === row.identifier_value).length;
+    const plan = planEarlierStart({ validFrom: row.valid_from, recordedTimes }, name, evidence.get(row.identifier_value) ?? null);
+    if (plan && "problem" in plan) problems.push(`  ${row.identifier_value} (${name}): ${plan.problem}`);
+    else if (plan) moves.push({ id: row.id, cusip: row.identifier_value, from: row.valid_from, ...plan });
+  }
+  console.log(`\nStart dates to move back (${moves.length}):`);
+  for (const move of moves) console.log(`  ${move.cusip}  ${move.from} → ${move.validFrom} (${move.sourceReference})`);
+  if (problems.length > 0) console.log(`\nNeed a person (${problems.length}):\n${problems.join("\n")}`);
+  if (dryRun || moves.length === 0) {
+    console.log(dryRun ? "\nDry run: database not changed." : "\nNothing changed.");
+    return;
+  }
+  for (const move of moves) {
+    await must(db.from("security_identifiers").update({ valid_from: move.validFrom, source_reference: move.sourceReference }).eq("id", move.id), "Move start date");
+  }
+  console.log(`\nMoved ${moves.length} start dates.`);
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -242,18 +314,34 @@ async function main() {
       "share-class": { type: "string" },
       investor: { type: "string" },
       top: { type: "string" },
+      alias: { type: "string" },
+      predecessor: { type: "string" },
+      until: { type: "string" },
+      source: { type: "string" },
+      "extend-windows": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
     },
   });
   const usage = "Usage: npm run add:security -- --cusip <CUSIP> --ticker <TICKER> [--share-class <name>] [--dry-run]\n"
-    + "       npm run add:security -- --investor <slug> [--top <count>] [--dry-run]";
+    + "       npm run add:security -- --investor <slug> [--top <count>] [--dry-run]\n"
+    + "       npm run add:security -- --alias <mistyped CUSIP> --ticker <TICKER> [--dry-run]\n"
+    + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--dry-run]\n"
+    + "       npm run add:security -- --extend-windows [--dry-run]";
   const db = () => connect(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SECRET_KEY"));
-  if (values.investor && !values.cusip && !values.ticker) {
+  const modes = [values.investor, values.cusip, values.alias, values.predecessor, values["extend-windows"] || undefined].filter((mode) => mode !== undefined);
+  if (modes.length !== 1) throw new Error(usage);
+  if (values.investor && !values.ticker) {
     const top = values.top === undefined ? null : Number(values.top);
     if (top !== null && !(Number.isInteger(top) && top > 0)) throw new Error(`--top must be a positive whole number.\n${usage}`);
     await addInvestorStocks(db(), values.investor.trim(), top, values["dry-run"]);
-  } else if (values.cusip && values.ticker && !values.investor && !values.top) {
+  } else if (values.cusip && values.ticker && !values.top) {
     await addOne(db(), values.cusip.trim().toUpperCase(), normalizeTicker(values.ticker), values["share-class"] ?? null, values["dry-run"]);
+  } else if (values.alias && values.ticker && !values.top) {
+    await addAlias(db(), values.alias.trim().toUpperCase(), normalizeTicker(values.ticker), values["dry-run"]);
+  } else if (values.predecessor && values.ticker && values.until && values.source && !values.top) {
+    await addPredecessor(db(), values.predecessor.trim().toUpperCase(), normalizeTicker(values.ticker), values.until.trim(), values.source.trim(), values["dry-run"]);
+  } else if (values["extend-windows"] && !values.ticker && !values.top) {
+    await extendWindows(db(), values["dry-run"]);
   } else {
     throw new Error(usage);
   }

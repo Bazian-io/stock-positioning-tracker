@@ -8,7 +8,9 @@ import {
   axisTicks, formatDate, formatNumber, formatNumberAxis, formatNumberCompact, formatPercent, formatUsd, formatUsdCompact, quarterLabel,
   quarterParts,
 } from "@/lib/portfolio";
-import { EXCHANGE_NAMES, holdingSeries, previousQuarter, quarterChange, type Change, type QuarterHolding } from "@/lib/stock";
+import {
+  EXCHANGE_NAMES, holdingSeries, lastQuarterBefore, previousQuarter, quarterChange, type Change, type QuarterHolding, type Unconfirmed,
+} from "@/lib/stock";
 import { getStock, getStockOwnership, type StockPosition } from "@/lib/stock-data";
 
 type StockPageProps = {
@@ -27,6 +29,11 @@ export async function generateMetadata({ params }: StockPageProps): Promise<Meta
 
 const OPTION_LABELS: Record<string, string> = { put: "put options", call: "call options" };
 
+// "20-for-1" or "1-for-10".
+function splitLabel(ratio: number): string {
+  return ratio >= 1 ? `${formatNumber(ratio)}-for-1` : `1-for-${formatNumber(Math.round(1 / ratio))}`;
+}
+
 // "Increased" with "+1,234 shares (+2.3%)", and so on. A change needs reports for both quarters.
 function describeChange(change: Change): { label: string; detail?: string } {
   const sign = (value: number) => (value > 0 ? "+" : value < 0 ? "−" : "");
@@ -38,6 +45,13 @@ function describeChange(change: Change): { label: string; detail?: string } {
       return { label: change.kind === "increased" ? "Increased" : "Decreased", detail: `${shares}${percent}` };
     case "unchanged":
       return { label: "Unchanged" };
+    case "split":
+      return {
+        label: "Likely stock split",
+        detail: `${splitLabel(change.splitRatio ?? 1)}: reported shares ${(change.splitRatio ?? 1) >= 1
+          ? `×${formatNumber(change.splitRatio ?? 1)}`
+          : `÷${formatNumber(Math.round(1 / (change.splitRatio ?? 1)))}`}`,
+      };
     case "opened":
       return { label: "New position", detail: `Not held in ${quarterLabel(change.previousPeriod)}` };
     case "closed":
@@ -45,14 +59,26 @@ function describeChange(change: Change): { label: string; detail?: string } {
     case "not-held":
       return { label: "Not held", detail: `Also not held in ${quarterLabel(change.previousPeriod)}` };
     case "not-comparable":
-      return { label: "Not comparable", detail: `No ${quarterLabel(change.previousPeriod)} report in our data` };
+      return {
+        label: "Not comparable",
+        detail: change.blocker?.reason === "unclear"
+          ? `Holding unclear in ${quarterLabel(change.blocker.reportPeriod)}`
+          : `No ${quarterLabel(change.blocker?.reportPeriod ?? change.previousPeriod)} report in our data`,
+      };
   }
 }
 
 function stateLabel(holding: QuarterHolding): string {
   if (holding.state === "held") return `${formatNumber(holding.shares)} shares`;
   if (holding.state === "not-held") return "Reported, not held";
+  if (holding.state === "unclear") return "Unclear";
   return "No report";
+}
+
+// Why a quarter is unclear: "Reported 107.12M shares under CUSIP G6683N103, which is not confirmed as NU
+// for this quarter".
+function unclearNote(unconfirmed: Unconfirmed, ticker: string): string {
+  return `Reported ${formatNumberCompact(unconfirmed.shares)} shares under CUSIP ${unconfirmed.cusip}, which is not confirmed as ${ticker} for this quarter`;
 }
 
 // Options on the stock are reported separately from shares: "Also reported call options on 1.20M shares".
@@ -68,7 +94,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   if (ticker !== requestedTicker) redirect(`/stocks/${encodeURIComponent(ticker)}`);
   const stock = await getStock(ticker);
   if (!stock) notFound();
-  const { investors, reports, positions } = await getStockOwnership(stock);
+  const { investors, reports, positions, unconfirmed } = await getStockOwnership(stock);
 
   // Every quarter any tracked investor reported, oldest first.
   const quarters = [...new Set(reports.map((report) => report.reportPeriod))].sort();
@@ -81,14 +107,20 @@ export default async function StockPage({ params, searchParams }: StockPageProps
 
   // Each investor's holding in every quarter: shares held long, separate from options.
   const series = new Map(investors.map((investor) => {
+    const longShares = (position: StockPosition) =>
+      position.investorId === investor.id && position.positionType === "long" && position.quantityType === "SH";
     const shares = new Map<string, { shares: number; valueUsd: number }>();
-    for (const position of positions) {
-      if (position.investorId !== investor.id || position.positionType !== "long" || position.quantityType !== "SH") continue;
+    for (const position of positions.filter(longShares)) {
       const total = shares.get(position.reportPeriod) ?? { shares: 0, valueUsd: 0 };
       shares.set(position.reportPeriod, { shares: total.shares + position.shares, valueUsd: total.valueUsd + position.valueUsd });
     }
+    const unclear = new Map<string, Unconfirmed>();
+    for (const position of unconfirmed.filter(longShares)) {
+      const total = unclear.get(position.reportPeriod)?.shares ?? 0;
+      unclear.set(position.reportPeriod, { cusip: position.cusip, shares: total + position.shares });
+    }
     const reported = new Map(reports.filter((report) => report.investorId === investor.id).map((report) => [report.reportPeriod, report]));
-    return [investor.id, holdingSeries(quarters, reported, shares)];
+    return [investor.id, holdingSeries(quarters, reported, shares, unclear)];
   }));
 
   const rows = investors.map((investor) => {
@@ -105,6 +137,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   });
   const holders = rows.filter((row) => row.current.state === "held").sort((a, b) => b.current.valueUsd - a.current.valueUsd);
   const notHeld = rows.filter((row) => row.current.state === "not-held");
+  const unclear = rows.filter((row) => row.current.state === "unclear");
   const noReport = rows.filter((row) => row.current.state === "no-report");
 
   // The investor shown in the chart: chosen in the URL, otherwise the holder with the most reported quarters
@@ -117,21 +150,36 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   const chartSeries = chartInvestor ? series.get(chartInvestor.id) ?? [] : [];
   const ticks = axisTicks(Math.max(0, ...chartSeries.map((holding) => holding.shares)));
   const scaleMax = ticks.at(-1) || 1;
-  const chartQuarters: ChartQuarter[] = chartSeries.map((holding) => {
+  const chartQuarters: ChartQuarter[] = chartSeries.map((holding, position) => {
     const quarter = quarterLabel(holding.reportPeriod);
     const held = holding.state === "held";
+    const { splitRatio } = quarterChange(holding, chartSeries[position - 1]);
+    const descriptions: Record<QuarterHolding["state"], string> = {
+      held: `${formatNumber(holding.shares)} shares reported`,
+      "not-held": "reported, not held",
+      unclear: "holding unclear",
+      "no-report": "no report in our data",
+    };
     return {
       reportPeriod: holding.reportPeriod,
       label: quarter,
       ...quarterParts(holding.reportPeriod),
-      valueLabel: held ? `${formatNumberCompact(holding.shares)} shares` : holding.state === "not-held" ? "0 shares" : "No report",
-      // A missing report is drawn as a full-height hatched column; its label sits above it.
-      height: held ? (holding.shares / scaleMax) * 100 : holding.state === "no-report" ? 100 : 0,
-      description: `${quarter}: ${held ? `${formatNumber(holding.shares)} shares reported` : holding.state === "not-held" ? "reported, not held" : "no report in our data"}`,
+      valueLabel: held ? `${formatNumberCompact(holding.shares)} shares` : holding.state === "not-held" ? "0 shares" : stateLabel(holding),
+      // A missing report or an unclear holding is drawn as a full-height hatched column; its label sits above it.
+      height: held ? (holding.shares / scaleMax) * 100 : holding.state === "not-held" ? 0 : 100,
+      description: `${quarter}: ${descriptions[holding.state]}`,
       details: held
-        ? [`${quarter} reported shares`, `${formatUsdCompact(holding.valueUsd)} reported value`]
-        : [holding.state === "not-held" ? `${quarter}: reported, not held` : `${quarter}: no 13F report in our data`],
-      state: holding.state === "not-held" ? "zero" : holding.state === "no-report" ? "missing" : undefined,
+        ? [
+          `${quarter} reported shares`,
+          `${formatUsdCompact(holding.valueUsd)} reported value`,
+          ...(splitRatio !== null ? [`Likely ${splitLabel(splitRatio)} stock split`] : []),
+        ]
+        : holding.state === "not-held"
+          ? [`${quarter}: reported, not held`]
+          : holding.unconfirmed
+            ? [`${quarter}: holding unclear`, unclearNote(holding.unconfirmed, stock.ticker)]
+            : [`${quarter}: no 13F report in our data`],
+      state: holding.state === "not-held" ? "zero" : held ? undefined : "missing",
     };
   });
   const chartTicks = ticks.map((tick) => ({ label: formatNumberAxis(tick), position: (tick / scaleMax) * 100 }));
@@ -140,13 +188,19 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   const quarterQuery: Record<string, string> = isLatest ? {} : { quarter: selected };
   const investorHref = (slug: string, reported: boolean) => `/investors/${slug}${reported ? `?quarter=${selected}` : ""}`;
   const currentCusips = stock.cusips.filter((period) => period.validTo === null).map((period) => period.cusip);
+  // Earlier CUSIPs, such as one replaced in a corporate action, or one that filers mistyped: "531229748, Q3 2023–Q3 2025".
+  const otherCusips = stock.cusips.flatMap((period) => period.validTo === null ? [] : [
+    `${period.cusip}, ${quarterLabel(period.validFrom)}–${quarterLabel(lastQuarterBefore(period.validTo))}`,
+  ]);
   const kind = stock.shareClass ?? stock.securityType.replace(/_/g, " ").replace(/^./, (letter) => letter.toUpperCase());
 
   const holderRow = (row: (typeof rows)[number]) => {
     const change = describeChange(row.change);
-    const note = row.current.state === "not-held" && row.current.confidentialOmissions
-      ? "This report omitted some holdings under confidential treatment, so the zero is not certain"
-      : optionsNote(row.options);
+    const note = row.current.unconfirmed
+      ? unclearNote(row.current.unconfirmed, stock.ticker)
+      : row.current.state === "not-held" && row.current.confidentialOmissions
+        ? "This report omitted some holdings under confidential treatment, so the zero is not certain"
+        : optionsNote(row.options);
     return (
       <tr key={row.investor.id}>
         <th scope="row" className={styles.security}>
@@ -165,8 +219,10 @@ export default async function StockPage({ params, searchParams }: StockPageProps
           {row.current.state === "held" ? formatPercent(row.portfolioShare) : "—"}
         </td>
         <td className={styles.security}>
-          {row.current.state === "no-report" ? (
-            <span className={styles.secondary}>No {label} report in our data</span>
+          {row.current.state === "no-report" || row.current.state === "unclear" ? (
+            <span className={styles.secondary}>
+              {row.current.state === "unclear" ? "Not comparable: holding unclear" : `No ${label} report in our data`}
+            </span>
           ) : (
             <>
               <span>{change.label}</span>
@@ -196,6 +252,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
               <span>{stock.ticker} · {EXCHANGE_NAMES[stock.exchange] ?? stock.exchange}</span>
               <span>{kind}</span>
               {currentCusips.length > 0 && <span>CUSIP {currentCusips.join(", ")}</span>}
+              {otherCusips.length > 0 && <span>Also matched under CUSIP {otherCusips.join("; ")}</span>}
             </p>
           </div>
           <QuarterSelect
@@ -231,7 +288,8 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                 </p>
               </div>
               <p className={styles.cardMeta}>
-                {holders.length} holding · {notHeld.length} reported without it · {noReport.length} no report
+                {holders.length} holding · {notHeld.length} reported without it
+                {unclear.length > 0 ? ` · ${unclear.length} unclear` : ""} · {noReport.length} no report
               </p>
             </div>
             <div className={styles.tableScroll}>
@@ -256,6 +314,12 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                     </tr>
                   )}
                   {notHeld.map(holderRow)}
+                  {unclear.length > 0 && (
+                    <tr className={styles.groupRow}>
+                      <th scope="colgroup" colSpan={5}>Reported for {label}, holding unclear</th>
+                    </tr>
+                  )}
+                  {unclear.map(holderRow)}
                   {noReport.length > 0 && (
                     <tr className={styles.groupRow}>
                       <th scope="colgroup" colSpan={5}>No {label} report in our data: holding unknown</th>
@@ -296,7 +360,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                 <ul className={styles.legend} aria-label="Chart legend">
                   <li><span className={styles.swatch} aria-hidden="true" />Reported shares</li>
                   <li><span className={styles.swatch} data-state="zero" aria-hidden="true" />Reported, not held</li>
-                  <li><span className={styles.swatch} data-state="missing" aria-hidden="true" />No report in our data</li>
+                  <li><span className={styles.swatch} data-state="missing" aria-hidden="true" />No report in our data, or unclear</li>
                 </ul>
                 <details className={styles.tableView}>
                   <summary>Show values as a table</summary>
@@ -323,6 +387,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                                 <td>
                                   {holding.state === "no-report" ? "—" : described.label}
                                   {holding.state !== "no-report" && described.detail ? `: ${described.detail}` : ""}
+                                  {holding.unconfirmed ? `. ${unclearNote(holding.unconfirmed, stock.ticker)}` : ""}
                                 </td>
                               </tr>
                             );
@@ -351,12 +416,22 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                   quarter in our data, so its holding is unknown.
                 </li>
                 <li>
+                  &ldquo;Unclear&rdquo; means the investor reported shares under one of {stock.ticker}&apos;s CUSIPs in a
+                  quarter that CUSIP is not yet confirmed for, so neither a holding nor a zero is shown.
+                </li>
+                <li>
                   Changes compare share counts with the previous quarter, only when the investor reported both. A change
                   in shares is a reported change, not proof of a trade.
                 </li>
                 <li>
-                  Holdings are matched to {stock.ticker} by CUSIP. Options on {stock.ticker} are listed separately and not
-                  counted as shares held; other share classes have their own pages.
+                  &ldquo;Likely stock split&rdquo; marks a change by an exact whole-number ratio, such as 20 times the shares,
+                  while the reported value per share fell by about as much. Shares are shown as reported, not adjusted
+                  for splits.
+                </li>
+                <li>
+                  Holdings are matched to {stock.ticker} by CUSIP, including, for the quarters shown above, an earlier CUSIP
+                  converted one-for-one into {stock.ticker} or a CUSIP that filers mistyped. Options on {stock.ticker} are listed
+                  separately and not counted as shares held; other share classes have their own pages.
                 </li>
               </ul>
             </div>

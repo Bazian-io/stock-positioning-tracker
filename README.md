@@ -74,8 +74,18 @@ key reaches the browser. Public readers see only fully validated filings.
 - Stock pages, `/stocks/[ticker]` (e.g. `/stocks/AAPL`): which tracked investors report holding the
   stock in a quarter, their shares, values and change from the previous quarter (increased,
   decreased, unchanged, new or closed), and a chart of one investor's reported shares by quarter.
-  A reported zero is shown differently from a quarter with no report. Holdings in dashboards link
-  to stock pages, and stock pages link back to the dashboards.
+  A reported zero is shown differently from a quarter with no report, and from an unclear quarter
+  (shares under the stock's CUSIP outside its recorded dates). A change by an exact whole-number
+  ratio is labelled as a likely stock split rather than as buying or selling. Holdings in
+  dashboards link to stock pages, and stock pages link back to the dashboards.
+
+**Data checks and backups**
+
+- `npm run check:data` lists what needs review after an import: missing quarters, mistyped CUSIPs,
+  values that disagree between investors or jump between quarters, and stocks whose ticker or
+  CUSIP has changed ([details](collectors/README.md#checking-the-data)).
+- `npm run backup:db` saves every row and proves the backup restores exactly
+  ([details](supabase/README.md#backups)).
 
 ## Current data
 
@@ -114,6 +124,12 @@ short-interest data yet.
   shares is a reported change, not proof of a trade.
 - **Not point-in-time.** The research views show the latest validated history, so they are not
   suitable for backtesting as of a past date.
+- **Stock splits and reorganizations.** Share counts are shown as reported, not adjusted for
+  splits. A split is labelled only when the investor did not also trade that quarter. An earlier
+  CUSIP is linked to a stock only when it was converted one-for-one; holdings converted at another
+  ratio (such as Sirius XM's in September 2024) start as a new position on the stock's page.
+- **Availability.** Supabase's free plan pauses a project after a period without activity, which
+  takes the live site offline until it is restored from the Supabase dashboard.
 
 ## Run locally
 
@@ -128,7 +144,8 @@ On Vercel, set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` only; the secret ke
 the web app.
 
 Checks (offline; they never touch Supabase or SEC): `npm run test:db`, `npm run test:collectors`,
-`npm run test:web`, `npm run typecheck` and `npm run lint`.
+`npm run test:web`, `npm run typecheck` and `npm run lint`. Read-only checks of the live data:
+`npm run check:data`; backups: `npm run backup:db`.
 
 ## Further documentation
 

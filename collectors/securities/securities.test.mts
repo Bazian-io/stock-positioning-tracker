@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
 import {
-  isValidCusip, markTickerConflicts, normalizeTicker, openFigiJob, planSecurity, sameCompany, secListing, shareClassOf, usListing,
+  dayAfter, isValidCusip, markTickerConflicts, normalizeTicker, openFigiJob, planAlias, planEarlierStart, planPredecessor, planSecurity, sameCompany, secListing, shareClassOf, usListing,
   type Candidate, type Evidence,
 } from "./identify.mts";
 
@@ -140,4 +140,86 @@ test("share classes become separate securities that the database keeps apart", a
   } finally {
     await db.close();
   }
+});
+
+test("a mistyped CUSIP is recorded for a stock only for the quarters filers used it, and never a real security", () => {
+  // Berkshire reported Nu Holdings (G6683N103) as G6693N103 from Q4 2021 to Q3 2022.
+  const typo = {
+    firstPeriod: "2021-12-31",
+    firstSourceUrl: "https://www.sec.gov/Archives/edgar/data/1067983/000095012322002973/0000950123-22-002973.txt",
+    latestPeriod: "2022-09-30",
+    reportedNames: ["NU HLDGS LTD ORD SHS CL A"],
+  };
+  const notFound = { warning: "No identifier found." };
+  assert.deepEqual(planAlias("G6693N103", "Nu Holdings Ltd.", notFound, typo), {
+    problems: [],
+    identifier: {
+      identifier_type: "cusip", identifier_value: "G6693N103", namespace: "",
+      valid_from: "2021-12-31", valid_to: "2022-10-01", source_reference: typo.firstSourceUrl,
+    },
+  });
+  assert.equal(dayAfter("2024-12-31"), "2025-01-01");
+  assert.deepEqual(planAlias("00507V109", "Nu Holdings Ltd.", { data: [{ name: "ACTIVISION BLIZZARD INC" }] }, typo).problems, [
+    "OpenFIGI knows 00507V109 as ACTIVISION BLIZZARD INC: it is a real security, not a typo",
+  ]);
+  assert.deepEqual(planAlias("G6693N103", "Apple Inc.", notFound, typo).problems, [
+    'Filers reported G6693N103 as "NU HLDGS LTD ORD SHS CL A", which does not match Apple Inc.',
+  ]);
+  assert.deepEqual(planAlias("G6693N103", "Nu Holdings Ltd.", notFound, null).problems, ["No tracked filing reports CUSIP G6693N103"]);
+});
+
+test("a CUSIP's start date moves back only to an earlier filing that names the same company", () => {
+  const reported = { firstPeriod: "2024-06-30", firstSourceUrl: "https://www.sec.gov/x.txt", latestPeriod: "2026-06-30", reportedNames: ["NVIDIA CORPORATION COM"] };
+  assert.deepEqual(planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 1 }, "NVIDIA CORP", reported), {
+    validFrom: "2024-06-30", sourceReference: "https://www.sec.gov/x.txt",
+  });
+  assert.equal(planEarlierStart({ validFrom: "2024-06-30", recordedTimes: 1 }, "NVIDIA CORP", reported), null);
+  assert.deepEqual(planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 1 }, "Apple Inc.", reported), {
+    problem: 'filers reported it as "NVIDIA CORPORATION COM", which does not match Apple Inc.',
+  });
+  assert.deepEqual(planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 2 }, "NVIDIA CORP", reported), {
+    problem: "the CUSIP is recorded for more than one period",
+  });
+});
+
+test("an earlier CUSIP is linked only when it was converted one-for-one, with an official source", () => {
+  // Liberty Media's Liberty Live Series A tracking stock, redeemed one-for-one for Liberty Live Holdings
+  // shares on 15 December 2025; Berkshire held 4,986,588 shares before and after.
+  const source = "https://www.libertymedia.com/news/detail/575/liberty-media-corporation-completes-split-off-of-liberty";
+  const input = {
+    cusip: "531229748",
+    stockName: "Liberty Live Holdings, Inc.",
+    stockCusips: [{ cusip: "530909100", validFrom: "2025-12-31", validTo: null }],
+    listed: null,
+    known: { data: [{ name: "LIBERTY MEDIA CORP-LIBERTY-A" }] },
+    filings: {
+      firstPeriod: "2023-09-30",
+      firstSourceUrl: "https://www.sec.gov/Archives/edgar/data/1067983/x.txt",
+      latestPeriod: "2025-09-30",
+      reportedNames: ["LIBERTY MEDIA CORP DEL COM LBTY LIV S A"],
+    },
+    until: "2025-12-15",
+    source,
+    continuity: [{ investor: "berkshire-hathaway", before: 4_986_588, after: 4_986_588 }],
+  };
+  assert.deepEqual(planPredecessor(input), {
+    problems: [],
+    identifier: { identifier_type: "cusip", identifier_value: "531229748", namespace: "", valid_from: "2023-09-30", valid_to: "2025-12-15", source_reference: source },
+  });
+  // Sirius XM's 2024 conversion was not one-for-one (0.8375 and 0.1 new shares), so it is not linked.
+  assert.match(planPredecessor({ ...input, continuity: [{ investor: "berkshire-hathaway", before: 132_878_213, after: 105_155_029 }] }).problems[0],
+    /No investor's share count carried over unchanged/);
+  assert.deepEqual(planPredecessor({ ...input, listed: { ticker: "LLYVA", name: "", securityType: "", marketSector: "", compositeFigi: "" } }).problems, [
+    "531229748 is still listed (LLYVA); only a CUSIP that is no longer listed can be a predecessor",
+  ]);
+  assert.deepEqual(planPredecessor({ ...input, known: { warning: "No identifier found." } }).problems, ["OpenFIGI does not know 531229748 as a security"]);
+  assert.deepEqual(planPredecessor({ ...input, source: "liberty release" }).problems, [
+    "The source must be the https address of an official record, such as the company's release or SEC filing",
+  ]);
+  assert.deepEqual(planPredecessor({ ...input, until: "2025-09-30" }).problems, ["Filings report 531229748 for 2025-09-30, on or after the conversion date 2025-09-30"]);
+  assert.deepEqual(planPredecessor({ ...input, stockCusips: [{ cusip: "530909100", validFrom: "2025-06-30", validTo: null }] }).problems, [
+    "The stock's CUSIP 530909100 already applies from 2025-06-30, before 2025-12-15",
+  ]);
+  assert.match(planPredecessor({ ...input, stockName: "Apple Inc." }).problems[0], /does not match Apple Inc\./);
+  assert.match(planPredecessor({ ...input, continuity: [] }).problems[0], /cannot be checked/);
 });

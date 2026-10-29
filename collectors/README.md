@@ -113,6 +113,67 @@ skips what is already recorded. Skipped CUSIPs need a person:
 - Names that do not match (OpenFIGI "P G & E CORP", SEC "PG&E Corp"): add it with `--cusip` and
   `--ticker` after checking.
 
+### Mistyped CUSIPs, earlier CUSIPs and start dates
+
+```sh
+npm run add:security -- --alias G6693N103 --ticker NU --dry-run   # a CUSIP a filer mistyped
+npm run add:security -- --predecessor 531229748 --ticker LLYVA --until 2025-12-15 \
+  --source <official record of the conversion> --dry-run          # an earlier CUSIP, converted one-for-one
+npm run add:security -- --extend-windows --dry-run                # after importing older quarters
+```
+
+Filers sometimes mistype a CUSIP: Berkshire filed Nu Holdings (G6683N103) as G6693N103 for four
+quarters, so Nu's page showed those quarters as "reported, not held". `--alias` records the mistyped
+CUSIP as an extra CUSIP of the stock, only for the quarters filings used it (that first filing is the
+evidence). It refuses a CUSIP that OpenFIGI knows as a security, listed or delisted, so a real
+security, such as another share class or a predecessor company, is never merged into a stock, and
+every name filers used for it must match the stock.
+
+A corporate action can replace a stock's CUSIP: Liberty Media's Liberty Live tracking stock was
+redeemed one-for-one for Liberty Live Holdings shares on 15 December 2025, so LLYVA's page started at
+Q4 2025 with a "new position". `--predecessor` records the earlier CUSIP as a CUSIP of the stock from
+the earliest quarter our filings report it until the conversion date (`--until`), with the official
+record (`--source`, a company release or SEC filing) as evidence. It refuses a CUSIP that is still
+listed or unknown to OpenFIGI, one whose dates would overlap the stock's other CUSIPs, names that do
+not match, and any conversion where no investor's share count carried over unchanged: share counts
+from a conversion at another ratio (Sirius XM's 2024 merger gave 0.8375 or 0.1 new shares) are not
+comparable, so those are not linked.
+
+A CUSIP identifies a stock from the earliest quarter our filings reported it when the stock was
+added. After older quarters are imported, `--extend-windows` moves each start date back to the
+earliest quarter now reported, with that filing as evidence, when the filers' names match the stock.
+Until then, stock pages show those quarters as "unclear" rather than as a zero.
+
+## Checking the data
+
+```sh
+npm run check:data                    # read-only; uses the publishable key, which cannot write
+npm run check:data -- --identities    # also re-checks every stock with OpenFIGI and SEC (about 2 minutes)
+```
+
+Lists what a person should review:
+
+- **Freshness:** each investor's latest quarter against the latest quarter whose 13F reports are due
+  (45 days after quarter end: 14 Feb, 15 May, 14 Aug and 14 Nov, or the next business day).
+- **Stock links:** likely earlier CUSIPs (a holding that ends as an investor's holding of a stock
+  starts with the same share count), mistyped CUSIPs, other CUSIPs under a stock's name (for example
+  a predecessor converted at another ratio, which needs a person), holdings outside their CUSIP's
+  recorded dates, and how much of each investor's latest value links to stock pages.
+- **Values:** likely stock splits (labelled on stock pages), value per share that differs between
+  investors for the same CUSIP and quarter or jumps more than fourfold between quarters (signs of a
+  mistyped value or a value in thousands), invalid CUSIP check digits and confidential omissions.
+- **Identities** (`--identities`): stocks whose CUSIP is no longer listed or now maps to another
+  ticker, or whose ticker SEC no longer lists or lists elsewhere.
+
+### After each import
+
+1. Back up first: `npm run backup:db` ([supabase/README.md](../supabase/README.md#backups)).
+2. Import, for example the new quarter after each filing deadline, and re-run the previous two or
+   three quarters to pick up late amendments.
+3. Run `npm run check:data` and resolve what it lists: `--extend-windows`, `--alias` and
+   `--predecessor` for stock links, and the SEC filing itself for value questions.
+4. Each quarter, run `npm run check:data -- --identities` for ticker and CUSIP changes.
+
 ### Other notes
 
 SEC access: requests send `SEC_USER_AGENT`, are spaced at least 200 ms apart (SEC allows 10 per
@@ -123,5 +184,5 @@ reported with `value_multiplier = 1000`. Older text-format filings, from before 
 filed as XML, are not supported.
 
 Not yet handled: notices (13F-NT and 13F-NT/A), amendments for a quarter with no original 13F-HR,
-mapping rows to `securities` (rows keep their reported CUSIPs with `security_id` empty) and
-scheduling.
+mapping rows to `securities` (rows keep their reported CUSIPs with `security_id` empty), linking a
+stock to a predecessor converted at a ratio other than one-for-one, and scheduling.

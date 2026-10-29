@@ -57,18 +57,71 @@ function toStock(security: SecurityRow, identifiers: IdentifierRow[]): Stock | n
   };
 }
 
-// Every stock with a current ticker, by ticker.
-export async function getStocks(): Promise<Stock[]> {
+type TickerRow = IdentifierRow & { securities: SecurityRow };
+// Each ticker belongs to one security, so the embedded security is a row, not a list.
+type TickerRows = { merge: false };
+
+// Current tickers, one per stock, each with its security.
+function currentTickers(count?: "exact") {
+  const date = today();
+  return readOnlySupabase().from("security_identifiers")
+    .select(`${IDENTIFIER_COLUMNS}, securities!inner(id, issuer_name, share_class, security_type)`, { count })
+    .eq("identifier_type", "ticker")
+    .lte("valid_from", date)
+    .or(`valid_to.is.null,valid_to.gt.${date}`);
+}
+
+const byTicker = (a: TickerRow, b: TickerRow) =>
+  a.identifier_value.localeCompare(b.identifier_value) || a.namespace.localeCompare(b.namespace) || a.security_id.localeCompare(b.security_id);
+
+export type StockPage = { stocks: Stock[]; total: number };
+
+// One page of stocks by ticker, and how many there are. A search finds tickers and company names that
+// contain the text, and exact CUSIPs, across all stocks. The database does the matching, so only the
+// matches' tickers and the page's stocks are loaded.
+export async function getStockPage(search: string, offset: number, limit: number): Promise<StockPage> {
   const db = readOnlySupabase();
-  const [securities, identifiers] = await Promise.all([
-    loadAll<SecurityRow>((from, to) => db.from("securities").select("id, issuer_name, share_class, security_type").order("id").range(from, to), "securities"),
-    loadAll<IdentifierRow>((from, to) => db.from("security_identifiers").select(IDENTIFIER_COLUMNS)
-      .in("identifier_type", ["cusip", "ticker"]).order("id").range(from, to), "security identifiers"),
-  ]);
-  return securities
-    .map((security) => toStock(security, identifiers.filter((row) => row.security_id === security.id)))
-    .filter((stock): stock is Stock => stock !== null)
-    .sort((a, b) => a.ticker.localeCompare(b.ticker));
+  // Wildcard characters would change what a search matches.
+  const text = search.replace(/[%_*\\]/g, "").trim();
+  let rows: TickerRow[];
+  let total: number;
+  if (text === "") {
+    const page = await currentTickers("exact")
+      .order("identifier_value").order("namespace").order("security_id")
+      .range(offset, offset + limit - 1)
+      .overrideTypes<TickerRow[], TickerRows>();
+    // PGRST103: the offset is past the last stock, e.g. a page number beyond the last page.
+    if (page.error?.code === "PGRST103") return { stocks: [], total: 0 };
+    if (page.error) throw new Error(`Could not load stocks: ${page.error.message}`);
+    rows = page.data;
+    total = page.count ?? 0;
+  } else {
+    const [tickerMatches, nameMatches, cusipMatches] = await Promise.all([
+      loadAll<TickerRow>((from, to) => currentTickers().ilike("identifier_value", `*${text.toUpperCase().replace(/[./]/g, "-")}*`)
+        .order("id").range(from, to).overrideTypes<TickerRow[], TickerRows>(), "stocks by ticker"),
+      loadAll<TickerRow>((from, to) => currentTickers().ilike("securities.issuer_name", `*${text}*`)
+        .order("id").range(from, to).overrideTypes<TickerRow[], TickerRows>(), "stocks by name"),
+      load<{ security_id: string }[]>(db.from("security_identifiers").select("security_id")
+        .eq("identifier_type", "cusip").eq("identifier_value", text.toUpperCase()), "stocks by CUSIP"),
+    ]);
+    const cusipSecurities = [...new Set(cusipMatches.map((row) => row.security_id))];
+    const byCusip = cusipSecurities.length === 0 ? [] : await load<TickerRow[]>(
+      currentTickers().in("security_id", cusipSecurities).overrideTypes<TickerRow[], TickerRows>(),
+      "stocks by CUSIP",
+    );
+    const matches = new Map([...tickerMatches, ...nameMatches, ...byCusip].map((row) => [row.security_id, row]));
+    const sorted = [...matches.values()].sort(byTicker);
+    rows = sorted.slice(offset, offset + limit);
+    total = sorted.length;
+  }
+  if (rows.length === 0) return { stocks: [], total };
+  const cusips = await load<IdentifierRow[]>(
+    db.from("security_identifiers").select(IDENTIFIER_COLUMNS)
+      .eq("identifier_type", "cusip").in("security_id", rows.map((row) => row.security_id)),
+    "CUSIPs",
+  );
+  const stocks = rows.map((row) => toStock(row.securities, [row, ...cusips.filter((cusip) => cusip.security_id === row.security_id)]));
+  return { stocks: stocks.filter((stock): stock is Stock => stock !== null), total };
 }
 
 // The stock with this current ticker. Loaded once per request, for both the page and its metadata.
@@ -113,6 +166,7 @@ export async function getStockTickers(cusips: string[], reportPeriod: string): P
 export type StockPosition = {
   investorId: string;
   reportPeriod: string;
+  cusip: string;
   positionType: string; // "long", "put" or "call".
   quantityType: string; // "SH" or "PRN".
   shares: number;
@@ -124,6 +178,9 @@ export type StockOwnership = {
   // Every quarter each investor reported (quarterly_portfolios), with its total reported value.
   reports: { investorId: string; reportPeriod: string; valueUsd: number; confidentialOmissions: boolean }[];
   positions: StockPosition[];
+  // Positions under one of the stock's CUSIPs in a quarter that CUSIP is not recorded for, e.g. before
+  // the earliest filing it was first seen in when it was added. They are not counted as the stock.
+  unconfirmed: StockPosition[];
 };
 
 // Every tracked investor's reported positions in the stock, in every quarter. The database selects
@@ -150,6 +207,16 @@ export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
       "positions",
     ),
   ]);
+  const all = positions.map((row) => ({
+    investorId: row.investor_id,
+    reportPeriod: row.report_period,
+    cusip: row.reported_cusip,
+    positionType: row.position_type,
+    quantityType: row.quantity_type,
+    shares: Number(row.quantity),
+    valueUsd: Number(row.value_usd),
+  }));
+  const confirmed = (position: StockPosition) => identifiesStock(stock.cusips, position.cusip, position.reportPeriod);
   return {
     investors,
     reports: reports.map((row) => ({
@@ -158,15 +225,7 @@ export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
       valueUsd: Number(row.value_usd),
       confidentialOmissions: row.has_confidential_omissions,
     })),
-    positions: positions
-      .filter((row) => identifiesStock(stock.cusips, row.reported_cusip, row.report_period))
-      .map((row) => ({
-        investorId: row.investor_id,
-        reportPeriod: row.report_period,
-        positionType: row.position_type,
-        quantityType: row.quantity_type,
-        shares: Number(row.quantity),
-        valueUsd: Number(row.value_usd),
-      })),
+    positions: all.filter(confirmed),
+    unconfirmed: all.filter((position) => !confirmed(position)),
   };
 }

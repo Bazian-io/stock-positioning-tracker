@@ -10,11 +10,13 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test:db": "node --test supabase/tests/*.test.mjs",
-    "test:collectors": "node --test \"collectors/**/*.test.mts\"",
+    "test:collectors": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"collectors/**/*.test.mts\"",
     "test:web": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.mts\"",
     "collect:13f": "node --env-file-if-exists=.env.local collectors/sec13f/collect.mts",
     "link:cik": "node --env-file-if-exists=.env.local collectors/sec13f/link-cik.mts",
-    "add:security": "node --env-file-if-exists=.env.local collectors/securities/add-security.mts"
+    "add:security": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=.env.local collectors/securities/add-security.mts",
+    "backup:db": "node --env-file-if-exists=.env.local supabase/backup.mts",
+    "check:data": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=.env.local collectors/checks/check-data.mts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.3",
