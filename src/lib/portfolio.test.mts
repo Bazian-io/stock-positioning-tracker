@@ -1,51 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  axisTicks, combineHoldings, formatDate, formatFilingDate, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact,
-  quarterLabel, secFilingUrl, type HoldingRow,
+  axisTicks, formatDate, formatFilingDate, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact, quarterLabel, secFilingUrl,
 } from "./portfolio.ts";
-
-const row = (overrides: Partial<HoldingRow>): HoldingRow => ({
-  cusip: "037833100",
-  issuer: "APPLE INC",
-  titleOfClass: "COM",
-  shares: 100,
-  quantityType: "SH",
-  positionType: "long",
-  valueUsd: 1000,
-  ...overrides,
-});
-
-test("rows for the same security are combined into one position", () => {
-  const positions = combineHoldings([
-    row({ shares: 100, valueUsd: 1000 }),
-    row({ shares: 50, valueUsd: 500 }),
-    row({ cusip: "025816109", issuer: "AMERICAN EXPRESS CO", shares: 10, valueUsd: 2500 }),
-  ]);
-  assert.deepEqual(
-    positions.map(({ issuer, shares, valueUsd, rowCount }) => ({ issuer, shares, valueUsd, rowCount })),
-    [
-      { issuer: "AMERICAN EXPRESS CO", shares: 10, valueUsd: 2500, rowCount: 1 },
-      { issuer: "APPLE INC", shares: 150, valueUsd: 1500, rowCount: 2 },
-    ],
-  );
-  assert.deepEqual(positions.map((position) => position.portfolioShare), [0.625, 0.375]);
-});
-
-test("share classes, options and principal amounts stay separate", () => {
-  const positions = combineHoldings([
-    row({ cusip: "02079K305", issuer: "ALPHABET INC", titleOfClass: "CAP STK CL A" }),
-    row({ cusip: "02079K107", issuer: "ALPHABET INC", titleOfClass: "CAP STK CL C" }),
-    row({ positionType: "put" }),
-    row({ positionType: "long" }),
-    row({ quantityType: "PRN" }),
-    row({ cusip: null, issuer: "NO CUSIP CO", titleOfClass: "COM" }),
-    row({ cusip: null, issuer: "NO CUSIP CO", titleOfClass: "COM" }),
-  ]);
-  assert.equal(positions.length, 6);
-  assert.equal(positions.find((position) => position.issuer === "NO CUSIP CO")?.rowCount, 2);
-  assert.ok(Math.abs(positions.reduce((sum, position) => sum + position.portfolioShare, 0) - 1) < 1e-12);
-});
 
 test("axis ticks start at zero and end at a round number above the maximum", () => {
   assert.deepEqual(axisTicks(363_553_518_000), [0, 100e9, 200e9, 300e9, 400e9]);

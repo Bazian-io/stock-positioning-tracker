@@ -1,10 +1,14 @@
 import "server-only";
-import { secFilingUrl, type HoldingRow } from "./portfolio";
+import { cache } from "react";
+import { secFilingUrl, type Position } from "./portfolio";
 import { readOnlySupabase } from "./supabase";
 
-export const BERKSHIRE_HATHAWAY_CIK = "0001067983";
-
-export type Investor = { id: string; name: string; cik: string };
+export type Investor = {
+  id: string;
+  name: string;
+  cik: string;
+  slug: string; // Permanent URL name: /investors/[slug].
+};
 
 export type QuarterSummary = {
   reportPeriod: string;
@@ -34,12 +38,13 @@ async function load<T>(request: PromiseLike<{ data: T | null; error: { message: 
   return data as T;
 }
 
-export async function getInvestor(cik: string): Promise<Investor | null> {
+// Loaded once per request, for both the page and its metadata.
+export const getInvestorBySlug = cache(async (slug: string): Promise<Investor | null> => {
   return load<Investor | null>(
-    readOnlySupabase().from("investors").select("id, name, cik").eq("cik", cik).maybeSingle(),
+    readOnlySupabase().from("investors").select("id, name, cik, slug").eq("slug", slug).maybeSingle(),
     "investor",
   );
-}
+});
 
 export type InvestorSummary = Investor & {
   quarterCount: number;
@@ -51,7 +56,7 @@ export type InvestorSummary = Investor & {
 // Every investor in the database, by name, with the quarters it has reported (quarterly_portfolios).
 export async function getInvestorSummaries(): Promise<InvestorSummary[]> {
   const db = readOnlySupabase();
-  const investors = await load<Investor[]>(db.from("investors").select("id, name, cik").order("name"), "investors");
+  const investors = await load<Investor[]>(db.from("investors").select("id, name, cik, slug").order("name"), "investors");
   const quarters: { investor_id: string; report_period: string; value_usd: string }[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     const page = await load<typeof quarters>(
@@ -112,40 +117,71 @@ export async function getQuarterSummaries(investorId: string): Promise<QuarterSu
   }));
 }
 
-// Every reported holding row for one quarter, from the portfolio_holdings research view.
-export async function getHoldingRows(investorId: string, reportPeriod: string): Promise<HoldingRow[]> {
-  const rows: HoldingRow[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const page = await load<{
-      reported_cusip: string | null;
-      reported_issuer: string;
-      reported_class: string | null;
-      quantity: string;
-      quantity_type: string;
-      position_type: string;
-      value_usd: string;
-    }[]>(
-      readOnlySupabase()
-        .from("portfolio_holdings")
-        .select("reported_cusip, reported_issuer, reported_class, quantity::text, quantity_type, position_type, value_usd::text")
-        .eq("investor_id", investorId)
-        .eq("report_period", reportPeriod)
-        .order("filing_id")
-        .order("source_row")
-        .range(from, from + PAGE_SIZE - 1),
-      "holdings",
-    );
-    rows.push(...page.map((row) => ({
-      cusip: row.reported_cusip,
-      issuer: row.reported_issuer,
-      titleOfClass: row.reported_class,
-      shares: Number(row.quantity),
-      quantityType: row.quantity_type,
-      positionType: row.position_type,
-      valueUsd: Number(row.value_usd),
-    })));
-    if (page.length < PAGE_SIZE) return rows;
-  }
+export type PositionPage = {
+  positions: Position[]; // Largest first, from the requested offset.
+  total: number; // Positions in the quarter.
+  largest: Position | null;
+};
+
+type PositionRow = {
+  reported_cusip: string | null;
+  reported_issuer: string;
+  reported_class: string | null;
+  quantity: string;
+  quantity_type: string;
+  position_type: string;
+  value_usd: string;
+  holding_row_count: number;
+};
+
+// Part of a quarter's positions, largest first, from the portfolio_positions research view. The
+// database combines the filing rows, so only the positions shown are downloaded, even for filers
+// with tens of thousands of rows. quarterValueUsd is the quarter's total reported value.
+export async function getPositions(
+  investorId: string,
+  reportPeriod: string,
+  quarterValueUsd: number,
+  offset: number,
+  limit: number,
+): Promise<PositionPage> {
+  const db = readOnlySupabase();
+  // Ties in value are ordered by security, so pages never overlap.
+  const query = (from: number, to: number, count?: "exact") =>
+    db.from("portfolio_positions")
+      .select(
+        "reported_cusip, reported_issuer, reported_class, quantity::text, quantity_type, position_type, value_usd::text, holding_row_count",
+        { count },
+      )
+      .eq("investor_id", investorId)
+      .eq("report_period", reportPeriod)
+      .order("value_usd", { ascending: false })
+      .order("reported_issuer")
+      .order("reported_cusip")
+      .order("reported_class")
+      .order("position_type")
+      .order("quantity_type")
+      .range(from, to);
+  const [page, top] = await Promise.all([
+    query(offset, offset + limit - 1, "exact"),
+    offset > 0 ? load<PositionRow[]>(query(0, 0), "largest position") : null,
+  ]);
+  // PGRST103: the offset is past the last position, e.g. a page number beyond the last page.
+  if (page.error?.code === "PGRST103") return { positions: [], total: 0, largest: null };
+  if (page.error) throw new Error(`Could not load positions: ${page.error.message}`);
+  const toPosition = (row: PositionRow): Position => ({
+    cusip: row.reported_cusip,
+    issuer: row.reported_issuer,
+    titleOfClass: row.reported_class,
+    shares: Number(row.quantity),
+    quantityType: row.quantity_type,
+    positionType: row.position_type,
+    valueUsd: Number(row.value_usd),
+    rowCount: Number(row.holding_row_count),
+    portfolioShare: quarterValueUsd > 0 ? Number(row.value_usd) / quarterValueUsd : 0,
+  });
+  const positions = ((page.data ?? []) as PositionRow[]).map(toPosition);
+  const largest = top ? top.map(toPosition)[0] : positions[0];
+  return { positions, total: page.count ?? positions.length, largest: largest ?? null };
 }
 
 // The SEC filings stored for one quarter, marking which ones the reported holdings use.
@@ -159,9 +195,10 @@ export async function getQuarterFilings(investor: Investor, reportPeriod: string
       amendment_type: QuarterFiling["amendmentType"];
       amendment_number: number;
       filed_at: string;
+      source_url: string;
     }[]>(
       db.from("filings")
-        .select("id, accession_number, form_type, amendment_type, amendment_number, filed_at")
+        .select("id, accession_number, form_type, amendment_type, amendment_number, filed_at, source_url")
         .eq("investor_id", investor.id)
         .eq("report_period", reportPeriod)
         .order("filed_at"),
@@ -180,6 +217,7 @@ export async function getQuarterFilings(investor: Investor, reportPeriod: string
     amendmentNumber: filing.amendment_number,
     filedAt: filing.filed_at,
     counted: countedIds.has(filing.id),
-    secUrl: secFilingUrl(investor.cik, filing.accession_number),
+    // Listed on EDGAR under the CIK that filed it, which can be one of the investor's earlier CIKs.
+    secUrl: secFilingUrl(/\/edgar\/data\/(\d+)\//.exec(filing.source_url)?.[1] ?? investor.cik, filing.accession_number),
   }));
 }

@@ -557,6 +557,14 @@
   font-weight: 550;
 }
 
+.tableLinks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 20px;
+  font-size: 14px;
+}
+
 /* Sources and notes */
 
 .split {

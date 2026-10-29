@@ -4,19 +4,21 @@ import styles from "./dashboard.module.css";
 
 const OPTION_LABELS: Record<string, string> = { put: "Put option", call: "Call option" };
 
+// keepScroll: stay at the same place on the page, e.g. when expanding the table.
+export type TableLink = { href: string; label: string; keepScroll?: boolean };
+
 type HoldingsTableProps = {
-  positions: Position[];
+  positions: Position[]; // The positions shown, largest first.
+  firstRank: number; // Rank of the first position shown.
+  largestShare: number; // The quarter's largest portfolio share.
   caption: string;
-  limit: number;
-  showAll: boolean;
-  toggleHref: string;
+  links: TableLink[];
+  status?: string; // e.g. "Positions 201–400 of 5,696".
 };
 
-// Largest positions first. Share bars are scaled to the largest position; the percentages are
-// shares of the quarter's total reported value.
-export function HoldingsTable({ positions, caption, limit, showAll, toggleHref }: HoldingsTableProps) {
-  const visible = showAll ? positions : positions.slice(0, limit);
-  const largestShare = positions[0]?.portfolioShare || 1;
+// Largest positions first. Share bars are scaled to the quarter's largest position; the
+// percentages are shares of the quarter's total reported value.
+export function HoldingsTable({ positions, firstRank, largestShare, caption, links, status }: HoldingsTableProps) {
   return (
     <>
       <div className={styles.tableScroll}>
@@ -34,9 +36,9 @@ export function HoldingsTable({ positions, caption, limit, showAll, toggleHref }
             </tr>
           </thead>
           <tbody>
-            {visible.map((position, index) => (
-              <tr key={[position.cusip, position.issuer, position.positionType, position.quantityType].join("|")}>
-                <td className={styles.rank}>{index + 1}</td>
+            {positions.map((position, index) => (
+              <tr key={[position.cusip, position.issuer, position.titleOfClass, position.positionType, position.quantityType].join("|")}>
+                <td className={styles.rank}>{formatNumber(firstRank + index)}</td>
                 <th scope="row" className={styles.security}>
                   <span className={styles.issuer}>{position.issuer}</span>
                   <span className={styles.securityClass}>
@@ -54,7 +56,10 @@ export function HoldingsTable({ positions, caption, limit, showAll, toggleHref }
                 <td className={styles.numeric}>
                   <span className={styles.share}>
                     <span className={styles.shareTrack} aria-hidden="true">
-                      <span className={styles.shareBar} style={{ width: `${(position.portfolioShare / largestShare) * 100}%` }} />
+                      <span
+                        className={styles.shareBar}
+                        style={{ width: `${largestShare > 0 ? (position.portfolioShare / largestShare) * 100 : 0}%` }}
+                      />
                     </span>
                     <span className={styles.shareValue}>{formatPercent(position.portfolioShare)}</span>
                   </span>
@@ -65,10 +70,15 @@ export function HoldingsTable({ positions, caption, limit, showAll, toggleHref }
           </tbody>
         </table>
       </div>
-      {positions.length > limit && (
-        <Link href={toggleHref} scroll={false} className={styles.tableToggle}>
-          {showAll ? `Show the top ${limit}` : `Show all ${positions.length} positions`}
-        </Link>
+      {(status || links.length > 0) && (
+        <div className={styles.tableLinks}>
+          {status && <span className={styles.secondary}>{status}</span>}
+          {links.map((link) => (
+            <Link key={link.label} href={link.href} scroll={link.keepScroll ? false : undefined} className={styles.tableToggle}>
+              {link.label}
+            </Link>
+          ))}
+        </div>
       )}
     </>
   );

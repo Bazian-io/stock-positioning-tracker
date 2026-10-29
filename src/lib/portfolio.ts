@@ -1,7 +1,10 @@
-// Presentation helpers for reported 13F data: combining filing rows into positions and formatting
-// values, dates and quarters. Kept free of imports so Node's test runner can load it directly.
+// Presentation helpers for reported 13F data: formatting values, dates and quarters. Kept free of
+// imports so Node's test runner can load it directly.
 
-export type HoldingRow = {
+// A reported position: a quarter's filing rows for the same security (CUSIP), position type and
+// quantity type, combined by the portfolio_positions database view. A filer can report one
+// position in several rows, for example one per subsidiary; share classes have their own CUSIPs.
+export type Position = {
   cusip: string | null;
   issuer: string;
   titleOfClass: string | null;
@@ -9,35 +12,10 @@ export type HoldingRow = {
   quantityType: string; // "SH" for shares, "PRN" for principal amount.
   positionType: string; // "long", "put" or "call".
   valueUsd: number;
-};
-
-export type Position = HoldingRow & {
   rowCount: number; // Filing rows combined into this position.
   portfolioShare: number; // Fraction of the quarter's total reported value.
 };
 
-// A 13F filer can report one position across several rows, for example one per group of
-// subsidiaries. Rows for the same security (CUSIP), position type and quantity type are combined;
-// share classes have their own CUSIPs, so they stay separate.
-export function combineHoldings(rows: HoldingRow[]): Position[] {
-  const total = rows.reduce((sum, row) => sum + row.valueUsd, 0);
-  const positions = new Map<string, Position>();
-  for (const row of rows) {
-    const security = row.cusip ?? `${row.issuer}|${row.titleOfClass ?? ""}`;
-    const key = [security, row.positionType, row.quantityType].join("|");
-    const position = positions.get(key);
-    if (position) {
-      position.shares += row.shares;
-      position.valueUsd += row.valueUsd;
-      position.rowCount += 1;
-    } else {
-      positions.set(key, { ...row, rowCount: 1, portfolioShare: 0 });
-    }
-  }
-  return [...positions.values()]
-    .map((position) => ({ ...position, portfolioShare: total > 0 ? position.valueUsd / total : 0 }))
-    .sort((a, b) => b.valueUsd - a.valueUsd || a.issuer.localeCompare(b.issuer));
-}
 
 // Evenly spaced axis ticks from zero to the first round number at or above the maximum.
 export function axisTicks(max: number, targetCount = 4): number[] {

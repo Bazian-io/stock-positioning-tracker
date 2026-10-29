@@ -3,16 +3,11 @@ import Link from "next/link";
 import { connection } from "next/server";
 import styles from "@/components/dashboard/dashboard.module.css";
 import { formatNumber, formatUsdCompact, quarterLabel } from "@/lib/portfolio";
-import { BERKSHIRE_HATHAWAY_CIK, getInvestorSummaries, type InvestorSummary } from "@/lib/portfolio-data";
+import { getInvestorSummaries, type InvestorSummary } from "@/lib/portfolio-data";
 
 export const metadata: Metadata = {
   title: "Investors",
   description: "Institutional investors tracked from their SEC Form 13F filings.",
-};
-
-// Investors with a dashboard, by CIK. The others are listed until their dashboards are added.
-const DASHBOARDS: Record<string, string> = {
-  [BERKSHIRE_HATHAWAY_CIK]: "/investors/berkshire-hathaway",
 };
 
 // "20 quarters, Q3 2021 – Q2 2026"
@@ -46,7 +41,7 @@ export default async function InvestorsPage() {
             </h2>
             <p className={styles.cardSubtitle}>
               Reported value is the market value of the 13F securities in each investor&apos;s latest reported
-              quarter. Select an investor to open its dashboard.
+              quarter, not an investment return. Select an investor to open its dashboard.
             </p>
           </div>
           <p className={styles.cardMeta}>
@@ -69,29 +64,21 @@ export default async function InvestorsPage() {
                 </tr>
               </thead>
               <tbody>
-                {investors.map((investor) => {
-                  const dashboard = DASHBOARDS[investor.cik];
-                  return (
-                    <tr key={investor.id}>
-                      <th scope="row" className={styles.security}>
-                        {dashboard ? (
-                          <Link href={dashboard} className={styles.issuer}>
-                            {investor.name}
-                          </Link>
-                        ) : (
-                          <span className={styles.issuer}>{investor.name}</span>
-                        )}
-                        {!dashboard && <span className={styles.securityClass}>Dashboard coming soon</span>}
-                      </th>
-                      <td className={`${styles.cusip} ${styles.wideOnly}`}>{investor.cik}</td>
-                      <td>{investor.latestQuarter ? quarterLabel(investor.latestQuarter) : "None yet"}</td>
-                      <td className={styles.numeric}>
-                        {investor.latestValueUsd === null ? "—" : formatUsdCompact(investor.latestValueUsd)}
-                      </td>
-                      <td className={`${styles.secondary} ${styles.optional}`}>{history(investor)}</td>
-                    </tr>
-                  );
-                })}
+                {investors.map((investor) => (
+                  <tr key={investor.id}>
+                    <th scope="row" className={styles.security}>
+                      <Link href={`/investors/${investor.slug}`} className={styles.issuer}>
+                        {investor.name}
+                      </Link>
+                    </th>
+                    <td className={`${styles.cusip} ${styles.wideOnly}`}>{investor.cik}</td>
+                    <td>{investor.latestQuarter ? quarterLabel(investor.latestQuarter) : "None yet"}</td>
+                    <td className={styles.numeric}>
+                      {investor.latestValueUsd === null ? "—" : formatUsdCompact(investor.latestValueUsd)}
+                    </td>
+                    <td className={`${styles.secondary} ${styles.optional}`}>{history(investor)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

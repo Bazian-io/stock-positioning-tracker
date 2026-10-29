@@ -2,24 +2,33 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import styles from "@/components/dashboard/dashboard.module.css";
-import { HoldingsTable } from "@/components/dashboard/holdings-table";
+import { HoldingsTable, type TableLink } from "@/components/dashboard/holdings-table";
 import { PendingFrame, QuarterNavigation, QuarterSelect } from "@/components/dashboard/quarter-navigation";
 import { ValueChart } from "@/components/dashboard/value-chart";
 import {
-  axisTicks, combineHoldings, formatDate, formatFilingDate, formatNumber, formatPercent, formatUsd, formatUsdAxis,
-  formatUsdCompact, quarterLabel, quarterParts,
+  axisTicks, formatDate, formatFilingDate, formatNumber, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact,
+  quarterLabel, quarterParts,
 } from "@/lib/portfolio";
 import {
-  BERKSHIRE_HATHAWAY_CIK, getHoldingRows, getInvestor, getQuarterFilings, getQuarterSummaries, type QuarterFiling,
+  getInvestorBySlug, getPositions, getQuarterFilings, getQuarterSummaries, type QuarterFiling,
 } from "@/lib/portfolio-data";
 
-export const metadata: Metadata = {
-  title: "Berkshire Hathaway 13F portfolio",
-  description: "Berkshire Hathaway's reported 13F holdings by quarter, from SEC filings.",
+type InvestorPageProps = {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-const PAGE_PATH = "/investors/berkshire-hathaway";
 const TOP_HOLDINGS = 10;
+const ALL_HOLDINGS_PAGE = 200; // Positions per page when showing all; large filers report thousands.
+
+export async function generateMetadata({ params }: InvestorPageProps): Promise<Metadata> {
+  const investor = await getInvestorBySlug((await params).slug);
+  if (!investor) return { title: "Investor not found" };
+  return {
+    title: `${investor.name} 13F portfolio`,
+    description: `${investor.name}'s reported 13F holdings by quarter, from SEC filings.`,
+  };
+}
 
 function filingRole(filing: QuarterFiling): string {
   if (filing.amendmentType === "none") return "Original report";
@@ -27,31 +36,55 @@ function filingRole(filing: QuarterFiling): string {
   return `Amendment ${filing.amendmentNumber}, ${role}`;
 }
 
-export default async function BerkshireHathawayPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const { quarter: requested, holdings } = await searchParams;
-  const investor = await getInvestor(BERKSHIRE_HATHAWAY_CIK);
+// One dashboard for every investor in the database, at /investors/[slug].
+export default async function InvestorPage({ params, searchParams }: InvestorPageProps) {
+  const [{ slug }, { quarter: requested, holdings, page }] = await Promise.all([params, searchParams]);
+  const investor = await getInvestorBySlug(slug);
   if (!investor) notFound();
   const quarters = await getQuarterSummaries(investor.id);
   const latest = quarters.at(-1);
   const selected = requested === undefined ? latest : quarters.find((quarter) => quarter.reportPeriod === requested);
   if (!latest || !selected) notFound();
 
-  const [rows, filings] = await Promise.all([
-    getHoldingRows(investor.id, selected.reportPeriod),
+  const showAll = holdings === "all";
+  const pageNumber = showAll && typeof page === "string" && /^[1-9]\d{0,5}$/.test(page) ? Number(page) : 1;
+  const limit = showAll ? ALL_HOLDINGS_PAGE : TOP_HOLDINGS;
+  const [{ positions, total, largest }, filings] = await Promise.all([
+    getPositions(investor.id, selected.reportPeriod, selected.valueUsd, (pageNumber - 1) * limit, limit),
     getQuarterFilings(investor, selected.reportPeriod),
   ]);
-  const positions = combineHoldings(rows);
-  const largest = positions[0];
+  if (positions.length === 0 && pageNumber > 1) notFound();
   const original = filings.find((filing) => filing.amendmentType === "none");
   const amendments = filings.filter((filing) => filing.amendmentType !== "none");
   const label = quarterLabel(selected.reportPeriod);
   const isLatest = selected === latest;
-  const quarterQuery = isLatest ? "" : `quarter=${selected.reportPeriod}`;
-  const showAll = holdings === "all";
+
+  // Links within the dashboard keep the selected quarter.
+  const pagePath = `/investors/${investor.slug}`;
+  const dashboardHref = (view: { all?: boolean; page?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (!isLatest) query.set("quarter", selected.reportPeriod);
+    if (view.all) query.set("holdings", "all");
+    if (view.page && view.page > 1) query.set("page", String(view.page));
+    return query.size > 0 ? `${pagePath}?${query}` : pagePath;
+  };
+  const pageCount = Math.ceil(total / ALL_HOLDINGS_PAGE);
+  const tableLinks: TableLink[] = [];
+  if (showAll && pageNumber > 1) {
+    tableLinks.push({ href: `${dashboardHref({ all: true, page: pageNumber - 1 })}#holdings`, label: "← Previous" });
+  }
+  if (showAll && pageNumber < pageCount) {
+    tableLinks.push({ href: `${dashboardHref({ all: true, page: pageNumber + 1 })}#holdings`, label: "Next →" });
+  }
+  if (total > TOP_HOLDINGS) {
+    tableLinks.push(showAll
+      ? { href: dashboardHref(), label: `Show the top ${TOP_HOLDINGS}`, keepScroll: true }
+      : { href: dashboardHref({ all: true }), label: `Show all ${formatNumber(total)} positions`, keepScroll: true });
+  }
+  const firstRank = showAll ? (pageNumber - 1) * ALL_HOLDINGS_PAGE + 1 : 1;
+  const tableStatus = showAll && pageCount > 1
+    ? `Positions ${formatNumber(firstRank)}–${formatNumber(firstRank + positions.length - 1)} of ${formatNumber(total)}`
+    : undefined;
 
   const ticks = axisTicks(Math.max(...quarters.map((quarter) => quarter.valueUsd)));
   const scaleMax = ticks.at(-1) ?? 1;
@@ -71,7 +104,7 @@ export default async function BerkshireHathawayPage({
         <nav className={styles.breadcrumb} aria-label="Breadcrumb">
           <Link href="/investors">Investors</Link>
           <span aria-hidden="true">/</span>
-          <span>Berkshire Hathaway</span>
+          <span>{investor.name}</span>
         </nav>
 
         <header className={styles.header}>
@@ -98,7 +131,7 @@ export default async function BerkshireHathawayPage({
               <span>
                 Showing {label}. The latest reported quarter is {quarterLabel(latest.reportPeriod)}.
               </span>
-              <Link href={PAGE_PATH} scroll={false}>
+              <Link href={pagePath} scroll={false}>
                 View the latest quarter
               </Link>
             </p>
@@ -133,7 +166,7 @@ export default async function BerkshireHathawayPage({
               </div>
               <div className={styles.tile}>
                 <p className={styles.label}>Positions</p>
-                <p className={styles.tileValue}>{formatNumber(positions.length)} securities</p>
+                <p className={styles.tileValue}>{formatNumber(total)} securities</p>
                 <p className={styles.note}>Combined from {formatNumber(selected.holdingRowCount)} filing rows</p>
               </div>
               <div className={styles.tile}>
@@ -153,40 +186,44 @@ export default async function BerkshireHathawayPage({
                   Reported portfolio value by quarter
                 </h2>
                 <p className={styles.cardSubtitle}>
-                  Total market value of the 13F securities reported at each quarter end,{" "}
-                  {chartQuarters[0].label} to {chartQuarters[chartQuarters.length - 1].label}. Changes reflect
-                  trading and price moves, not investment returns. Select a bar to view that quarter.
+                  {quarters.length > 1
+                    ? `Total market value of the 13F securities reported at each quarter end, ${chartQuarters[0].label} to ${chartQuarters[chartQuarters.length - 1].label}. Changes reflect trading and price moves, not investment returns. Select a bar to view that quarter.`
+                    : `Only one quarter, ${label}, has been imported for this investor so far. The chart appears once there are two quarters to compare.`}
                 </p>
               </div>
             </div>
-            <ValueChart quarters={chartQuarters} ticks={chartTicks} selected={selected.reportPeriod} />
-            <details className={styles.tableView}>
-              <summary>Show values as a table</summary>
-              <div className={styles.tableScroll}>
-                <table className={styles.table}>
-                  <thead>
-                    <tr>
-                      <th scope="col">Quarter</th>
-                      <th scope="col" className={styles.optional}>Quarter end</th>
-                      <th scope="col" className={styles.numeric}>Reported value</th>
-                      <th scope="col" className={`${styles.numeric} ${styles.optional}`}>Filing rows</th>
-                      <th scope="col">Amended</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {quarters.toReversed().map((quarter) => (
-                      <tr key={quarter.reportPeriod}>
-                        <th scope="row">{quarterLabel(quarter.reportPeriod)}</th>
-                        <td className={styles.optional}>{formatDate(quarter.reportPeriod)}</td>
-                        <td className={styles.numeric}>{formatUsd(quarter.valueUsd)}</td>
-                        <td className={`${styles.numeric} ${styles.optional}`}>{formatNumber(quarter.holdingRowCount)}</td>
-                        <td>{quarter.amended ? "Yes" : "No"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
+            {quarters.length > 1 && (
+              <>
+                <ValueChart quarters={chartQuarters} ticks={chartTicks} selected={selected.reportPeriod} />
+                <details className={styles.tableView}>
+                  <summary>Show values as a table</summary>
+                  <div className={styles.tableScroll}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th scope="col">Quarter</th>
+                          <th scope="col" className={styles.optional}>Quarter end</th>
+                          <th scope="col" className={styles.numeric}>Reported value</th>
+                          <th scope="col" className={`${styles.numeric} ${styles.optional}`}>Filing rows</th>
+                          <th scope="col">Amended</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {quarters.toReversed().map((quarter) => (
+                          <tr key={quarter.reportPeriod}>
+                            <th scope="row">{quarterLabel(quarter.reportPeriod)}</th>
+                            <td className={styles.optional}>{formatDate(quarter.reportPeriod)}</td>
+                            <td className={styles.numeric}>{formatUsd(quarter.valueUsd)}</td>
+                            <td className={`${styles.numeric} ${styles.optional}`}>{formatNumber(quarter.holdingRowCount)}</td>
+                            <td>{quarter.amended ? "Yes" : "No"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              </>
+            )}
           </section>
 
           <section className={styles.card} aria-labelledby="holdings">
@@ -196,20 +233,21 @@ export default async function BerkshireHathawayPage({
                   Largest holdings, {label}
                 </h2>
                 <p className={styles.cardSubtitle}>
-                  Ranked by reported value. Berkshire reports some positions in several rows, one per group of
-                  subsidiaries; rows for the same security are combined here. Share classes stay separate.
+                  Ranked by reported value. Filers can report one position in several rows, for example one per
+                  subsidiary or adviser; rows for the same security are combined here. Share classes stay separate.
                 </p>
               </div>
               <p className={styles.cardMeta}>
-                {formatNumber(positions.length)} securities · {formatUsdCompact(selected.valueUsd)}
+                {formatNumber(total)} securities · {formatUsdCompact(selected.valueUsd)}
               </p>
             </div>
             <HoldingsTable
               positions={positions}
+              firstRank={firstRank}
+              largestShare={largest?.portfolioShare ?? 0}
               caption={`Largest holdings, ${label}, combined by security`}
-              limit={TOP_HOLDINGS}
-              showAll={showAll}
-              toggleHref={`${PAGE_PATH}?${[quarterQuery, showAll ? "" : "holdings=all"].filter(Boolean).join("&")}`}
+              links={tableLinks}
+              status={tableStatus}
             />
           </section>
 
@@ -237,9 +275,9 @@ export default async function BerkshireHathawayPage({
               <h2 className={styles.cardTitle}>About these numbers</h2>
               <ul className={styles.notes}>
                 <li>
-                  Reported value is the market value, at quarter-end prices, of the securities Berkshire Hathaway
-                  listed on Form 13F. It leaves out cash, bonds, wholly owned businesses and anything else outside
-                  the SEC&apos;s 13F list.
+                  Reported value is the market value, at quarter-end prices, of the securities {investor.name} listed
+                  on Form 13F. It leaves out short positions, cash, private holdings and anything else outside the
+                  SEC&apos;s 13F list.
                 </li>
                 <li>
                   These are historical disclosures, not investment performance. A change between quarters mixes

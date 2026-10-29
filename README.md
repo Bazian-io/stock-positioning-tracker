@@ -58,8 +58,11 @@ key reaches the browser. Public readers see only fully validated filings.
 - Two research sections, Investors and Stocks, linked from the homepage and the main navigation.
 - Investors page: every investor in the database with its latest quarter, reported value and
   history.
-- Berkshire Hathaway dashboard: portfolio value by quarter (chart and table), quarter selection,
-  largest holdings, and the SEC filings behind each quarter with links to EDGAR.
+- Investor dashboards: one shared page, `/investors/[slug]`, for every investor in the database
+  (e.g. `/investors/berkshire-hathaway`, `/investors/blackrock`). Each investor's URL name is stored
+  in the database when it is added, so it stays the same if the investor's name changes. Portfolio value by quarter (chart
+  and table), quarter selection, largest holdings, and the SEC filings behind each quarter with
+  links to EDGAR. Positions are combined in the database, so large filers load quickly.
 - Stocks page: a placeholder describing the planned Stock Analysis section.
 
 ## Current data
@@ -81,8 +84,6 @@ security-mapping data yet.
   and the other ~18 investors have not been imported.
 - **Stock Analysis.** Holdings keep the CUSIP reported in each filing. They are not yet mapped
   to securities and tickers, so the Stocks section is a placeholder.
-- **Investor dashboards beyond Berkshire.** The Investors page lists every investor, but only
-  Berkshire Hathaway has a dashboard; BlackRock's holdings are stored but not shown.
 - **Automation.** Collection runs manually, one investor at a time. There is no investor list
   and no scheduled job (GitHub Actions is planned).
 

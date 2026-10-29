@@ -171,6 +171,45 @@ test("quarterly portfolios apply additions, then restatements, then later additi
   assert.equal((await db.query("select * from public.portfolio_holdings")).rows.length, 2);
 });
 
+test("portfolio positions combine a quarter's rows per security; classes, options and units stay separate", async () => {
+  await filing({}, [
+    { quantity: 100, reported_value: 1000 },
+    { quantity: 50, reported_value: 500 }, // The same position, reported for another subsidiary.
+    { reported_cusip: "02079K305", reported_issuer: "ALPHABET INC", reported_class: "CL A", quantity: 10, reported_value: 2500 },
+    { reported_cusip: "02079K107", reported_issuer: "ALPHABET INC", reported_class: "CL C", quantity: 10, reported_value: 2400 },
+    { quantity: 5, reported_value: 50, position_type: "put" },
+    { quantity: 7, reported_value: 70, quantity_type: "PRN" },
+    { reported_cusip: null, reported_issuer: "NO CUSIP CO", reported_class: "COM", quantity: 1, reported_value: 10 },
+    { reported_cusip: null, reported_issuer: "NO CUSIP CO", reported_class: "COM", quantity: 2, reported_value: 20 },
+  ]);
+  const positions = (await db.query(`select reported_issuer as issuer, reported_class as class, position_type, quantity_type,
+      quantity::float8 as quantity, value_usd::float8 as value_usd, holding_row_count::int as rows
+    from public.portfolio_positions order by portfolio_positions.value_usd desc`)).rows;
+  assert.deepEqual(positions, [
+    { issuer: "ALPHABET INC", class: "CL A", position_type: "long", quantity_type: "SH", quantity: 10, value_usd: 2500, rows: 1 },
+    { issuer: "ALPHABET INC", class: "CL C", position_type: "long", quantity_type: "SH", quantity: 10, value_usd: 2400, rows: 1 },
+    { issuer: "Example issuer", class: null, position_type: "long", quantity_type: "SH", quantity: 150, value_usd: 1500, rows: 2 },
+    { issuer: "Example issuer", class: null, position_type: "long", quantity_type: "PRN", quantity: 7, value_usd: 70, rows: 1 },
+    { issuer: "Example issuer", class: null, position_type: "put", quantity_type: "SH", quantity: 5, value_usd: 50, rows: 1 },
+    { issuer: "NO CUSIP CO", class: "COM", position_type: "long", quantity_type: "SH", quantity: 3, value_usd: 30, rows: 2 },
+  ]);
+});
+
+test("portfolio positions follow amendments, apply value units and show public readers only completed filings", async () => {
+  const original = await filing({ value_multiplier: 1000 }, [{ quantity: 10, reported_value: 100 }]);
+  const amendment = { investor_id: original.investor_id, original_filing_id: original.id, form_type: "13F-HR/A" };
+  await filing({ ...amendment, amendment_type: "new_holdings", amendment_number: 1, filed_at: "2026-08-02T12:00:00Z" },
+    [{ quantity: 20, reported_value: 200 }]);
+  await filing({ ...amendment, amendment_type: "restatement", amendment_number: 2, filed_at: "2026-08-03T12:00:00Z" },
+    [{ quantity: 99, reported_value: 990 }], false);
+  await db.exec("set local role anon;");
+  const positions = (await db.query(
+    "select quantity::float8 as quantity, value_usd::float8 as value_usd, holding_row_count::int as rows from public.portfolio_positions",
+  )).rows;
+  assert.deepEqual(positions, [{ quantity: 30, value_usd: 100200, rows: 2 }]);
+  await rejected("insert into public.portfolio_positions (investor_id) values ($1)", [original.investor_id], /permission denied|cannot insert/);
+});
+
 test("notice reports differ from verified empty portfolios; partial coverage is explicit", async () => {
   await filing({ form_type: "13F-NT", report_type: "notice", reported_entry_count: null, reported_total_value: null }, []);
   const empty = await filing({}, []);
@@ -443,6 +482,44 @@ test("the raw_row migration keeps only fields the columns cannot reproduce, and 
       has_table_privilege('anon', 'public.portfolio_holdings', 'SELECT') as read,
       has_table_privilege('anon', 'public.portfolio_holdings', 'INSERT') as write`)).rows, [{ read: true, write: false }]);
     await assert.rejects(database.query("update public.holdings set raw_row = '{}'"), /immutable/);
+  } finally {
+    await database.close();
+  }
+});
+
+test("investors get a permanent, unique URL slug when they are added", async () => {
+  const add = async (name, cik) => (await insert("investors", { name, cik })).slug;
+  assert.equal(await add("Berkshire Hathaway Inc", "0001067983"), "berkshire-hathaway");
+  assert.equal(await add("BlackRock, Inc.", "0002012383"), "blackrock");
+  assert.equal(await add("PRICE T ROWE ASSOCIATES INC /MD/", "0000080255"), "price-t-rowe-associates");
+  assert.equal(await add("D. E. Shaw & Co., Inc.", "0001009207"), "d-e-shaw");
+  assert.equal(await add("Pershing Square Capital Management, L.P.", "0001336528"), "pershing-square-capital-management");
+  // A taken slug gets the CIK; a name without letters or digits gets the CIK alone.
+  assert.equal(await add("Example Capital LLC", "0000000101"), "example-capital");
+  assert.equal(await add("Example Capital, L.P.", "0000000102"), "example-capital-102");
+  assert.equal(await add("株式会社", "0000000103"), "103");
+  // Renaming keeps the URL.
+  await db.query("update public.investors set name = 'BlackRock Holdings' where cik = '0002012383'");
+  assert.equal((await db.query("select slug from public.investors where cik = '0002012383'")).rows[0].slug, "blackrock");
+  await rejected("update public.investors set slug = 'blackrock' where cik = '0001067983'", [], /duplicate key/);
+  await rejected("insert into public.investors (name, cik, slug) values ('Bad', '0000000104', 'Not A Slug')", [], /check constraint/);
+});
+
+test("the slug migration gives existing investors the URLs the website already uses", async () => {
+  const name = "20261029120000_investor_slugs.sql";
+  const database = await createDatabase(migrations.indexOf(name));
+  try {
+    await database.exec(`
+      insert into public.investors (name, cik, created_at) values
+        ('Berkshire Hathaway Inc', '0001067983', '2026-10-28T12:00:00Z'),
+        ('BlackRock, Inc.', '0002012383', '2026-10-28T13:00:00Z');
+    `);
+    const investors = "select id, name, cik, track_filings, created_at from public.investors order by cik";
+    const before = (await database.query(investors)).rows;
+    await database.exec(await readFile(new URL(name, migrationsDir), "utf8"));
+    assert.deepEqual((await database.query(investors)).rows, before);
+    assert.deepEqual((await database.query("select slug from public.investors order by cik")).rows.map((row) => row.slug),
+      ["berkshire-hathaway", "blackrock"]);
   } finally {
     await database.close();
   }

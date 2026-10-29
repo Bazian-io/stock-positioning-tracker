@@ -1,6 +1,6 @@
 # Research database
 
-The migrations create eight tables and four read-only research views.
+The migrations create eight tables and five read-only research views.
 They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 `authenticated`, and `service_role` roles. Authentication UI is not required.
 
@@ -8,7 +8,7 @@ They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 
 | Table | Purpose |
 | --- | --- |
-| `investors` | Tracked filing managers, identified by zero-padded 10-digit CIKs. |
+| `investors` | Tracked filing managers, identified by zero-padded 10-digit CIKs, with a permanent URL `slug` assigned when each is added. |
 | `investor_ciks` | Every CIK an investor has filed under, e.g. before and after a reorganization; each CIK belongs to one investor. |
 | `securities` | Stable internal identities for security/share classes and the short-interest watchlist flag. |
 | `security_identifiers` | Verified CUSIP, ticker, FIGI and provider-symbol mappings with validity periods. |
@@ -71,6 +71,9 @@ quarter; unresolved links must be resolved before marking an amendment complete.
   each investor and quarter, then includes later additions linked to that same
   original. Source order is filing timestamp, amendment number, accession.
 - `portfolio_holdings`: the selected source rows, with normalized USD values.
+- `portfolio_positions`: `portfolio_holdings` rows for the same security (CUSIP), position type
+  and quantity type combined into one position, as dashboards show them. Pages read only the
+  positions they display instead of every source row.
 - `quarterly_portfolios`: row counts, total reported value and coverage flags.
   A validated zero-row report appears here; a missing report does not.
 - `latest_short_interest`: latest accepted revision per security, settlement
