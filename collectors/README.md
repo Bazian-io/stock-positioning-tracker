@@ -80,21 +80,38 @@ filed under any of them, and stops if two CIKs filed an original report for the 
 ## Stocks
 
 Stock pages find a stock's holdings by its CUSIP. Add a stock (one share class) with its CUSIP and
-ticker:
+ticker, or every stock an investor reported:
 
 ```sh
 npm run add:security -- --cusip 037833100 --ticker AAPL --dry-run   # show the evidence only
 npm run add:security -- --cusip 037833100 --ticker AAPL
 npm run add:security -- --cusip 02079K305 --ticker GOOGL --share-class "Class A"
+npm run add:security -- --investor berkshire-hathaway --dry-run    # every stock it reported, any quarter
+npm run add:security -- --investor blackrock --top 500             # its 500 largest positions
 ```
 
-The command checks the CUSIP's check digit, that OpenFIGI maps the CUSIP to the ticker as a US
-equity, that SEC's company ticker file lists the ticker on Nasdaq or NYSE, and that our filings
-report the CUSIP. It then adds a `securities` row and two `security_identifiers`: the CUSIP, valid
-from the earliest quarter our filings report it (that filing is the evidence), and the ticker on
-its exchange's MIC, valid from the day SEC's file was read. Each share class has its own CUSIP and
-ticker, so classes stay separate. Holdings themselves are not changed. A CUSIP or ticker that is
-already recorded is left as it is.
+For each CUSIP the command checks its check digit; that OpenFIGI maps it to a listed US stock
+(common stock, ADR, REIT and the like; not ETFs, funds or preferred shares) with that ticker; that
+SEC's company ticker file lists the ticker on Nasdaq or NYSE (with `--investor`, also under a
+company name that matches OpenFIGI's); and that our filings report the CUSIP. It then adds a
+`securities` row and two `security_identifiers`: the CUSIP, valid from the earliest quarter our
+filings report it (that filing is the evidence), and the ticker on its exchange's MIC, valid from
+the day SEC's file was read. Each share class has its own CUSIP and ticker, so classes stay
+separate; with `--investor` the class comes from OpenFIGI's name ("ALPHABET INC-CL A"). Holdings
+themselves are not changed. A CUSIP or ticker that is already recorded is left as it is.
+
+`--investor` takes the investor's long share positions (not options or bonds), largest first by the
+largest value reported in any quarter; `--top` keeps that many. It looks up OpenFIGI without an API
+key (10 CUSIPs a request, 25 requests a minute, so about 3 minutes for 500), prints the stocks to add
+and the ones skipped with the reason, and adds them unless `--dry-run` is given. Running it again
+skips what is already recorded. Skipped CUSIPs need a person:
+
+- No current US listing: the company was delisted, taken private or acquired, or changed its CUSIP
+  (Exxon Mobil's reorganization into ExxonMobil Holdings gave it a new one). OpenFIGI maps only
+  listed securities, so an old CUSIP is never matched to a ticker that now belongs to its successor.
+- A ticker that is already recorded, or that two CUSIPs map to: decide which CUSIP it belongs to.
+- Names that do not match (OpenFIGI "P G & E CORP", SEC "PG&E Corp"): add it with `--cusip` and
+  `--ticker` after checking.
 
 ### Other notes
 

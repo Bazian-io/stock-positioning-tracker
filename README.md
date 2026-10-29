@@ -56,7 +56,8 @@ key reaches the browser. Public readers see only fully validated filings.
 **Stock identification** (`npm run add:security`, [details](collectors/README.md#stocks))
 
 - Adds a stock (one share class) with its CUSIP and ticker after OpenFIGI, SEC's company ticker
-  file and our filings agree. Holdings are matched to stocks by CUSIP when a page is read.
+  file and our filings agree, one at a time or all the stocks an investor reported (optionally only
+  its largest positions). Holdings are matched to stocks by CUSIP when a page is read.
 
 **Web app**
 
@@ -85,16 +86,19 @@ As of 28 October 2026:
 | Berkshire Hathaway Inc | 1067983 | 20 quarters, Q3 2021 – Q2 2026 | 24 (3 quarters amended) | Q2 2026: 89 rows, $299.25B |
 | BlackRock, Inc. | 2012383 (since Q3 2024), 1364742 (BlackRock Inc. until Q2 2024) | Q2 2026 only | 1 | Q2 2026: 49,968 rows, $6.73T |
 
-Database totals: 2 investors, 25 filings, 52,828 holding rows. One stock is identified: Apple
-(AAPL, CUSIP 037833100). No short-interest data yet.
+Database totals: 2 investors, 25 filings, 52,828 holding rows. 505 stocks are identified (29 October
+2026): every stock Berkshire reported that is still listed, and BlackRock's 500 largest positions
+except ETFs and a few skipped CUSIPs (see [collectors/README.md](collectors/README.md#stocks)). No
+short-interest data yet.
 
 ## Unfinished features
 
 - **Short-interest collector.** The database tables and views exist; nothing fills them yet.
 - **Remaining investors.** Only Berkshire Hathaway has full history. BlackRock has one quarter,
   and the other ~18 investors have not been imported.
-- **More stocks.** Only Apple has been identified; each further stock is added with
-  `npm run add:security`. Stock prices and short interest are not shown yet.
+- **More stocks.** BlackRock's smaller positions, delisted stocks and stocks whose CUSIP changed
+  (such as Exxon Mobil's) have no stock page yet; see `npm run add:security`. Stock prices and
+  short interest are not shown yet.
 - **Automation.** Collection runs manually, one investor at a time. There is no investor list
   and no scheduled job (GitHub Actions is planned).
 

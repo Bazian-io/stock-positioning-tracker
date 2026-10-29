@@ -8,6 +8,9 @@ export const OPENFIGI_URL = "https://api.openfigi.com/v3/mapping";
 // Exchange names in SEC's ticker file and their ISO 10383 market identifier codes (MICs).
 export const EXCHANGE_MICS: Record<string, string> = { Nasdaq: "XNAS", NYSE: "XNYS" };
 
+// OpenFIGI security types that are stocks. Funds and ETFs (ETP), preferred shares and units are not.
+export const STOCK_TYPES = ["Common Stock", "ADR", "REIT", "MLP", "NY Reg Shrs", "Tracking Stk"];
+
 // The CUSIP check digit (ANSI X9.6): characters 1–8 weighted 1, 2, 1, 2, …, digits of each product summed.
 export function isValidCusip(cusip: string): boolean {
   if (!/^[0-9A-Z*@#]{8}[0-9]$/.test(cusip)) return false;
@@ -26,11 +29,18 @@ export function normalizeTicker(ticker: string): string {
   return ticker.trim().toUpperCase().replace(/[./]/g, "-");
 }
 
+// An OpenFIGI mapping job for a CUSIP. Issuers incorporated outside the US have CINS numbers, CUSIPs
+// that start with a letter ("H1467J104" for Chubb), which OpenFIGI looks up as their own type.
+export function openFigiJob(cusip: string) {
+  return { idType: /^[A-Z]/.test(cusip) ? "ID_CINS" : "ID_CUSIP", idValue: cusip };
+}
+
 export type FigiListing = { ticker: string; name: string; securityType: string; marketSector: string; compositeFigi: string };
 
-// The US composite listing in an OpenFIGI mapping response for one identifier, if there is one.
-export function usListing(response: unknown): FigiListing | null {
-  const data = (Array.isArray(response) ? response[0] : null)?.data;
+// The US composite listing in OpenFIGI's result for one mapping job, if there is one. OpenFIGI maps
+// only listed securities by default, so a delisted CUSIP has none.
+export function usListing(result: unknown): FigiListing | null {
+  const data = (result as { data?: unknown } | null)?.data;
   const row = Array.isArray(data) ? data.find((entry) => entry?.exchCode === "US") : undefined;
   if (!row) return null;
   return {
@@ -57,6 +67,33 @@ export function secListing(file: { fields: string[]; data: unknown[][] }, ticker
   };
 }
 
+// The share class at the end of an OpenFIGI name ("ALPHABET INC-CL A", "LENNAR CORP - B SHS",
+// "LIBERTY MEDIA CORP-C"), if it names one.
+export function shareClassOf(figiName: string): string | null {
+  const match = /-\s*(?:CL(?:ASS)?\s+)?([A-Z])(?:\s+SH(?:S|ARES))?$/.exec(figiName.trim());
+  return match ? `Class ${match[1]}` : null;
+}
+
+// Words that say what kind of company a name is, not which one.
+const GENERIC_WORDS = new Set([
+  "THE", "OF", "AND", "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COS", "COMPANY", "LTD", "LIMITED",
+  "PLC", "LLC", "LP", "NV", "SA", "AG", "SE", "NEW", "DEL", "DE", "CL", "CLASS", "COM", "SHS", "SHARES",
+  "HOLDINGS", "HOLDING", "GROUP", "TRUST", "TR",
+]);
+
+function nameWords(name: string): Set<string> {
+  const words = name.toUpperCase().replace(/['’]/g, "").split(/[^A-Z0-9]+/);
+  return new Set(words.filter((word) => word.length > 1 && !GENERIC_WORDS.has(word)));
+}
+
+// Whether two sources' names for a company share a distinctive word ("MOODY'S CORP" and
+// "MOODYS CORP /DE/"). Names are abbreviated differently, so this only catches clear mismatches, such as
+// a ticker that now belongs to another company.
+export function sameCompany(a: string, b: string): boolean {
+  const words = nameWords(b);
+  return [...nameWords(a)].some((word) => words.has(word));
+}
+
 // Where our filings report the CUSIP: the earliest quarter (with a filing as evidence) and the
 // names filers used for it.
 export type FilingEvidence = { firstPeriod: string; firstSourceUrl: string; latestPeriod: string; reportedNames: string[] };
@@ -78,7 +115,7 @@ export function planSecurity(evidence: Evidence, today: string, shareClass: stri
   if (!figi) problems.push(`OpenFIGI has no US listing for CUSIP ${cusip}`);
   else {
     if (figi.ticker !== ticker) problems.push(`OpenFIGI maps CUSIP ${cusip} to ${figi.ticker}, not ${ticker}`);
-    if (figi.marketSector !== "Equity") problems.push(`OpenFIGI lists ${cusip} as ${figi.marketSector}, not Equity`);
+    if (!STOCK_TYPES.includes(figi.securityType)) problems.push(`OpenFIGI lists ${cusip} as ${figi.securityType}, not a stock`);
   }
   if (!sec) problems.push(`${ticker} is not in SEC's company ticker file`);
   else if (!EXCHANGE_MICS[sec.exchange]) problems.push(`${ticker} trades on ${sec.exchange}; only ${Object.keys(EXCHANGE_MICS).join(" and ")} are supported`);
@@ -88,7 +125,7 @@ export function planSecurity(evidence: Evidence, today: string, shareClass: stri
     problems,
     plan: {
       security: {
-        issuer_name: sec.name,
+        issuer_name: sec.name.replace(/\s*\/(?:[A-Z]{2,3}\/?)?$/, ""), // without SEC's tag ("MOODYS CORP /DE/", "LENNAR CORP /NEW/")
         share_class: shareClass,
         security_type: figi.securityType.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
       },
@@ -98,4 +135,19 @@ export function planSecurity(evidence: Evidence, today: string, shareClass: stri
       ],
     },
   };
+}
+
+export type Candidate = { cusip: string; ticker: string | null; plan: PlannedSecurity | null; problems: string[] };
+
+// A ticker identifies one stock at a time. A planned ticker that is already recorded, or that two CUSIPs
+// map to (as after a reorganization that changed the CUSIP), needs a person to decide which CUSIP it
+// belongs to, so those candidates are not added.
+export function markTickerConflicts(candidates: Candidate[], recordedTickers: Set<string>): void {
+  const planned = candidates.filter((candidate) => candidate.plan && candidate.ticker);
+  for (const candidate of planned) {
+    const others = planned.filter((other) => other !== candidate && other.ticker === candidate.ticker).map((other) => other.cusip);
+    if (recordedTickers.has(candidate.ticker ?? "")) candidate.problems.push(`${candidate.ticker} is already recorded for another CUSIP`);
+    else if (others.length > 0) candidate.problems.push(`CUSIPs ${[candidate.cusip, ...others].join(", ")} all map to ${candidate.ticker}`);
+  }
+  for (const candidate of planned) if (candidate.problems.length > 0) candidate.plan = null;
 }
