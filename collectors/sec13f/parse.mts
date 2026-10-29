@@ -103,10 +103,59 @@ export function toUnits(decimal: string): bigint {
   return BigInt(whole + fraction.padEnd(4, "0"));
 }
 
+// Filers round each row's value to a whole dollar (or thousand), so the summary page's total can
+// differ from the sum of the rows by up to half a unit per row (ValueAct, Elliott and TCI by 1 or 2).
+// The database applies the same rule when a filing is completed.
+export function totalMatchesRows(valueSum: bigint, valueTotal: bigint, rows: number): boolean {
+  const difference = valueSum > valueTotal ? valueSum - valueTotal : valueTotal - valueSum;
+  return difference * BigInt(2) <= BigInt(rows) * toUnits("1");
+}
+
 // 13F values are whole dollars in filings made from 2023-01-03 (including amendments to older
 // quarters) and thousands of dollars before that, so the unit follows the filing date.
 export function valueMultiplier(filedAt: string): 1 | 1000 {
   return filedAt >= "2023-01-03" ? 1 : 1000;
+}
+
+export type ApparentUnit = { unit: "dollars" | "thousands" | "unclear"; valuePerShare: number | null };
+
+// The unit a filing's values appear to be in, from its median value per share of long share rows:
+// share prices are mostly $2 to $1,000, so in dollars that is the value per share, and in thousands of
+// dollars it is below 0.5. Between 0.5 and 2, or with fewer than 5 share rows, the unit is unclear: a
+// single cheap security proves nothing (D. E. Shaw's one-row amendment: warrants worth $0.11 each).
+export function apparentValueUnit(holdings: Holding[]): ApparentUnit {
+  const prices = holdings
+    .filter((holding) => holding.positionType === "long" && holding.quantityType === "SH" && Number(holding.quantity) > 0)
+    .map((holding) => Number(holding.value) / Number(holding.quantity))
+    .sort((a, b) => a - b);
+  if (prices.length === 0) return { unit: "unclear", valuePerShare: null };
+  const valuePerShare = prices[Math.floor(prices.length / 2)];
+  if (prices.length < 5) return { unit: "unclear", valuePerShare };
+  return { unit: valuePerShare < 0.5 ? "thousands" : valuePerShare > 2 ? "dollars" : "unclear", valuePerShare };
+}
+
+// The unit to store for a filing: SEC's rule by filing date, checked against the values themselves.
+// Some managers kept reporting thousands after 2023 (Baupost, Duquesne); storing those in dollars would
+// make them a thousand times too small, so such a filing is refused until a person has checked it and
+// confirmed values in thousands. A filing before 2023 that appears to be in dollars is refused too.
+export function storedValueMultiplier(
+  filedAt: string,
+  apparent: ApparentUnit,
+  thousandsConfirmed: boolean,
+): { multiplier: 1 | 1000 } | { problem: string } {
+  const rule = valueMultiplier(filedAt);
+  const typical = apparent.valuePerShare?.toFixed(3) ?? "unknown";
+  if (rule === 1 && apparent.unit === "thousands") {
+    if (thousandsConfirmed) return { multiplier: 1000 };
+    return {
+      problem: `values appear to be in thousands of dollars (median value per share ${typical}), although filed after `
+        + "2 January 2023, when SEC switched 13F values to dollars. Check the filing; if it reports thousands, run again with --values-in-thousands",
+    };
+  }
+  if (rule === 1000 && apparent.unit === "dollars") {
+    return { problem: `values appear to be in dollars (median value per share ${typical}), although filed before 3 January 2023, when 13F values were in thousands` };
+  }
+  return { multiplier: rule };
 }
 
 function toHolding(row: unknown, sourceRow: number): Holding {
@@ -134,7 +183,8 @@ function toHolding(row: unknown, sourceRow: number): Holding {
 }
 
 // Parses an EDGAR full submission (<accession>.txt): an SGML header plus the cover/summary XML
-// and the information table XML. Rejects filings whose table disagrees with their summary page.
+// and the information table XML. Rejects filings whose table disagrees with their summary page by
+// more than rounding.
 export function parseFullSubmission(submissionText: string): Filing13F {
   const accessionNumber = /^ACCESSION NUMBER:\s*(\S+)/m.exec(submissionText)?.[1] ?? fail("Missing accession number");
   const documents = new Map<string, string>();
@@ -171,7 +221,8 @@ export function parseFullSubmission(submissionText: string): Filing13F {
     amendmentType: isAmendment
       ? AMENDMENT_TYPES[amendmentTypeText] ?? fail(`Unsupported amendment type: ${amendmentTypeText}`)
       : "none",
-    amendmentNumber: isAmendment ? Number(matching(text(cover, "amendmentNo"), /^[1-9]\d{0,3}$/, "amendmentNo")) : 0,
+    // Some filers pad the number ("01" in Pershing Square's Q4 2021 amendment).
+    amendmentNumber: isAmendment ? Number(matching(text(cover, "amendmentNo"), /^0{0,3}[1-9]\d{0,3}$/, "amendmentNo")) : 0,
     cik: matching(text(submission, "headerData", "filerInfo", "filer", "credentials", "cik"), /^\d{10}$/, "filer CIK"),
     managerName: text(cover, "filingManager", "name") ?? fail("Missing filing manager name"),
     reportPeriod: `${year}-${month}-${day}`,
@@ -202,7 +253,7 @@ export function parseFullSubmission(submissionText: string): Filing13F {
     fail(`Information table has ${holdings.length} rows; the summary page reports ${filing.entryTotal}`);
   }
   const valueSum = holdings.reduce((sum, holding) => sum + toUnits(holding.value), BigInt(0));
-  if (valueSum !== toUnits(filing.valueTotal)) {
+  if (!totalMatchesRows(valueSum, toUnits(filing.valueTotal), holdings.length)) {
     fail(`Information table values sum to ${valueSum / BigInt(10_000)}; the summary page reports ${filing.valueTotal}`);
   }
   return filing;

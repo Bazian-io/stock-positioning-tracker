@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { reportedPortfolio, type ReportedPortfolio } from "./amendments.mts";
 import { toUnits, type Filing13F, type Holding } from "./parse.mts";
+import type { CikLink } from "./sec.mts";
 import { sourceRow, unreportedFields, type HoldingColumns } from "./source-row.mts";
 
 // A parsed filing plus its SEC index metadata and download provenance.
@@ -151,8 +152,9 @@ export function compareStored(source: SourceFiling, stored: StoredFiling, ids: F
     (sum, row) => sum + (typeof row.reported_value === "string" ? toUnits(row.reported_value) : BigInt(0)),
     BigInt(0),
   );
-  if (storedTotal !== toUnits(source.valueTotal)) {
-    problems.push(`Stored rows sum to ${storedTotal / BigInt(10_000)}; SEC summary reports ${source.valueTotal}`);
+  const sourceTotal = source.holdings.reduce((sum, holding) => sum + toUnits(holding.value), BigInt(0));
+  if (storedTotal !== sourceTotal) {
+    problems.push(`Stored rows sum to ${storedTotal / BigInt(10_000)}; the SEC rows sum to ${sourceTotal / BigInt(10_000)}`);
   }
   return problems;
 }
@@ -207,7 +209,7 @@ async function readPortfolio(db: SupabaseClient, investorId: string, reportPerio
   return { filingIds: filings.map((row) => row.filing_id), summary };
 }
 
-export type InvestorRecord = { id: string; name: string; ciks: string[] };
+export type InvestorRecord = { id: string; name: string; ciks: string[]; links: CikLink[] };
 
 // The investor that has filed under this CIK, with every CIK it has filed under (investor_ciks).
 export async function findInvestor(db: SupabaseClient, cik: string): Promise<InvestorRecord | null> {
@@ -218,9 +220,16 @@ export async function findInvestor(db: SupabaseClient, cik: string): Promise<Inv
   if (!link) return null;
   const [investor, links] = await Promise.all([
     must<{ id: string; name: string }>(db.from("investors").select("id, name").eq("id", link.investor_id).single(), "Read investor"),
-    must<{ cik: string }[]>(db.from("investor_ciks").select("cik").eq("investor_id", link.investor_id).order("cik"), "Read investor CIKs"),
+    must<{ cik: string; first_report_period: string | null }[]>(
+      db.from("investor_ciks").select("cik, first_report_period").eq("investor_id", link.investor_id).order("cik"),
+      "Read investor CIKs",
+    ),
   ]);
-  return { ...investor, ciks: links.map((row) => row.cik) };
+  return {
+    ...investor,
+    ciks: links.map((row) => row.cik),
+    links: links.map((row) => ({ cik: row.cik, firstReportPeriod: row.first_report_period })),
+  };
 }
 
 // Records another CIK an investor has filed under. A CIK can belong to one investor only.
@@ -230,6 +239,7 @@ export async function linkCik(
   cik: string,
   entityName: string,
   sourceReference: string,
+  firstReportPeriod: string | null = null, // The CIK counts for the investor from this quarter end on.
 ): Promise<"linked" | "already_linked"> {
   const existing = await must<{ investor_id: string } | null>(
     db.from("investor_ciks").select("investor_id").eq("cik", cik).maybeSingle(),
@@ -238,7 +248,9 @@ export async function linkCik(
   if (existing && existing.investor_id !== investorId) throw new Error(`CIK ${cik} already belongs to another investor`);
   if (existing) return "already_linked";
   await must(
-    db.from("investor_ciks").insert({ cik, investor_id: investorId, entity_name: entityName, source_reference: sourceReference }),
+    db.from("investor_ciks").insert({
+      cik, investor_id: investorId, entity_name: entityName, source_reference: sourceReference, first_report_period: firstReportPeriod,
+    }),
     "Link CIK",
   );
   return "linked";
@@ -250,7 +262,7 @@ async function addInvestor(db: SupabaseClient, source: SourceFiling): Promise<In
     db.from("investors").insert({ name: source.managerName, cik: source.cik }).select("id, name").single(),
     "Add investor",
   );
-  return { ...created, ciks: [source.cik] };
+  return { ...created, ciks: [source.cik], links: [{ cik: source.cik, firstReportPeriod: null }] };
 }
 
 // Follows the import protocol in supabase/README.md: pending filing, all source rows, then a

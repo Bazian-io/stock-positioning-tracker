@@ -2,12 +2,13 @@
 // the latest quarter, or selected ones. An investor linked to several CIKs (npm run link:cik) is
 // searched under all of them.
 // Usage: npm run collect:13f -- [--cik 1067983] [--quarter 2026-03-31 | 2026Q1]... [--from 2021Q3 --to 2026Q2] [--dry-run]
+//        [--values-in-thousands]  (after checking that the filer reports thousands of dollars after 2023)
 import { parseArgs } from "node:util";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { reportedPortfolio } from "./amendments.mts";
-import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
+import { apparentValueUnit, parseFullSubmission, storedValueMultiplier, toUnits } from "./parse.mts";
 import {
-  createSecClient, findQuarterFilings, fullSubmissionUrl, normalizeCik, normalizeQuarter, quarterRange,
+  ciksForQuarter, createSecClient, findQuarterFilings, fullSubmissionUrl, normalizeCik, normalizeQuarter, quarterRange,
   type FilingIndexEntry, type SecClient,
 } from "./sec.mts";
 import { connect, findInvestor, importQuarter, type SourceFiling } from "./store.mts";
@@ -29,17 +30,19 @@ function requireEnv(name: string): string {
   return value;
 }
 
-async function download(sec: SecClient, entry: FilingIndexEntry): Promise<SourceFiling> {
+async function download(sec: SecClient, entry: FilingIndexEntry, thousandsConfirmed: boolean): Promise<SourceFiling> {
   const document = await sec.get(fullSubmissionUrl(entry.cik, entry.accessionNumber));
   const parsed = parseFullSubmission(document.text);
   if (parsed.accessionNumber !== entry.accessionNumber || parsed.formType !== entry.form
     || parsed.cik !== entry.cik || parsed.reportPeriod !== entry.reportDate) {
     throw new Error(`Downloaded filing ${entry.accessionNumber} does not match SEC's filing index`);
   }
+  const unit = storedValueMultiplier(entry.acceptedAt, apparentValueUnit(parsed.holdings), thousandsConfirmed);
+  if ("problem" in unit) throw new Error(`Filing ${entry.accessionNumber}: ${unit.problem}`);
   return {
     ...parsed,
     filedAt: entry.acceptedAt,
-    valueMultiplier: valueMultiplier(entry.acceptedAt),
+    valueMultiplier: unit.multiplier,
     sourceUrl: document.url,
     sourceChecksum: document.sha256,
   };
@@ -47,10 +50,14 @@ async function download(sec: SecClient, entry: FilingIndexEntry): Promise<Source
 
 // Downloads, checks and (unless db is null) imports one quarter's original filing and its
 // amendments, filed under any of the investor's CIKs. quarter undefined means the latest quarter.
-async function collect(sec: SecClient, ciks: string[], quarter: string | undefined, db: SupabaseClient | null) {
+// thousandsConfirmed: a person has checked that filings made after 2023 report values in thousands.
+async function collect(sec: SecClient, ciks: string[], quarter: string | undefined, db: SupabaseClient | null, thousandsConfirmed: boolean) {
   const selected = await findQuarterFilings(sec, ciks, quarter);
+  for (const entry of selected.supersededAmendments) {
+    console.log(`  ${entry.accessionNumber} (${entry.form}) was filed before the latest original and amended an earlier one; not used`);
+  }
   const filings: SourceFiling[] = [];
-  for (const entry of [selected.original, ...selected.amendments]) filings.push(await download(sec, entry));
+  for (const entry of [selected.original, ...selected.amendments]) filings.push(await download(sec, entry, thousandsConfirmed));
   const portfolio = reportedPortfolio(filings);
 
   console.log(`${filings[0].managerName}, quarter ${selected.reportDate}: ${filings.length} SEC filing(s), each matching its summary page`);
@@ -82,6 +89,7 @@ async function main() {
       quarter: { type: "string", multiple: true },
       from: { type: "string" },
       to: { type: "string" },
+      "values-in-thousands": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
     },
   });
@@ -104,10 +112,15 @@ async function main() {
     db = connect(supabaseUrl, requireEnv("SUPABASE_SECRET_KEY"));
   }
   const investor = db ? await findInvestor(db, cik) : null;
-  const ciks = investor?.ciks ?? [cik];
-  if (investor && ciks.length > 1) console.log(`${investor.name} has filed under CIKs ${ciks.join(" and ")}.`);
+  const links = investor?.links ?? [{ cik, firstReportPeriod: null }];
+  if (investor && links.length > 1) {
+    const described = links.map((link) => link.cik + (link.firstReportPeriod ? ` (from ${link.firstReportPeriod})` : ""));
+    console.log(`${investor.name} has filed under CIKs ${described.join(" and ")}.`);
+  }
   // One quarter at a time; stops at the first failure. Completed filings are skipped on re-runs.
-  for (const quarter of quarters) await collect(sec, ciks, quarter, values["dry-run"] ? null : db);
+  for (const quarter of quarters) {
+    await collect(sec, ciksForQuarter(links, quarter), quarter, values["dry-run"] ? null : db, values["values-in-thousands"]);
+  }
   if (quarters.length > 1) console.log(`Finished all ${quarters.length} quarters.`);
 }
 

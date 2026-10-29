@@ -21,6 +21,7 @@ npm run collect:13f                          # import Berkshire Hathaway's lates
 npm run collect:13f -- --quarter 2026-03-31  # a specific quarter (or 2026Q1); repeat for several
 npm run collect:13f -- --from 2021Q3 --to 2026Q2  # every quarter in a range, oldest first
 npm run collect:13f -- --cik 1067983         # choose the manager by CIK (any of its linked CIKs)
+npm run collect:13f -- --cik 1061768 --values-in-thousands  # a filer that reports thousands after 2023
 npm run link:cik -- --cik 2012383 --add-cik 1364742  # record another CIK the manager filed under
 npm run test:collectors                      # offline tests: synthetic filings, disposable database
 ```
@@ -32,8 +33,9 @@ Each run, per quarter:
    index pages only when needed. Downloads each full submission, recording its URL and SHA-256
    checksum.
 2. Parses each cover page, summary page and information table, including the amendment type and
-   number. A filing is rejected unless its table's row count and value total match its own
-   summary page.
+   number. A filing is rejected unless its table's row count matches its own summary page and its
+   value total matches it within rounding: filers round each row to a whole dollar (or thousand),
+   so the total may differ by up to half a unit per row (ValueAct, Elliott and TCI by 1 or 2).
 3. Logs one `collection_runs` row for the quarter, then imports the original followed by each
    amendment, linked to the original. Each filing is added as `pending` with every source row and
    then marked `complete`; the database re-checks counts, row numbering and totals before accepting.
@@ -52,6 +54,10 @@ A 13F-HR/A either restates the whole report (`restatement`) or adds holdings to 
 reported holdings are the latest original or restatement plus the new-holdings amendments filed
 after it. Every filing stays stored as history; the portfolio views apply this rule, and the
 collector checks that they agree with the SEC filings.
+
+A filer occasionally files a quarter's original again. The latest original counts, and amendments
+filed before it amended the earlier original, so they are not used (the collector says so): State
+Street restated Q4 2022 at 20:20 on 15 May 2023 and then filed the same report as an original at 21:20.
 
 Amendments can arrive months after the original (Berkshire's 2025-03-31 amendment came three
 months later), so re-run recent quarters to pick them up. The collector warns when a filer's
@@ -76,6 +82,20 @@ The command prints both entities' SEC names over time and the quarters each repo
 CIK that already belongs to another investor or that reported a quarter one of the investor's CIKs
 also reported. The collector then searches all linked CIKs for each quarter, accepts amendments
 filed under any of them, and stops if two CIKs filed an original report for the same quarter.
+
+A CIK can count from a given quarter on (`--from`). Pershing Square, Inc. (CIK 2026053) reports
+Pershing Square's portfolio from Q2 2026: Pershing Square Capital Management (CIK 1336528) filed a
+13F-NT notice naming it for that quarter. Before that, Pershing Square, Inc. filed small separate
+reports of its own direct Howard Hughes stake while Capital Management reported the portfolio; those
+are not imported, so that stake (9 million shares) is missing from Q2 2025 to Q1 2026:
+
+```sh
+npm run link:cik -- --cik 1336528 --add-cik 2026053 --from 2026Q2 --source <URL of the 13F-NT notice>
+```
+
+Greenlight Capital Inc. (CIK 1079114) reported until Q4 2023 and DME Capital Management (CIK 1489933),
+which Greenlight's last report lists as an included manager, from Q1 2024; they are linked as one
+investor.
 
 ## Stocks
 
@@ -208,6 +228,13 @@ second), retry rate-limit and server errors with backoff, and stop on HTTP 403.
 Historical quarters: filings made before 2023-01-03 report values in thousands; they are stored as
 reported with `value_multiplier = 1000`. Older text-format filings, from before 13F reports were
 filed as XML, are not supported.
+
+Value units: the collector also reads each filing's median value per share. Share prices are mostly
+$2 to $1,000, so in dollars that is the value per share, and in thousands it is below 0.5. Some
+managers kept reporting thousands after 2023 (Baupost Group in every filing since; Duquesne too); with
+the date rule alone they would be stored a thousand times too small. A filing whose values look like
+the other unit is refused. After checking the filing, run again with `--values-in-thousands` to store
+it in thousands; that never changes a filing that is in dollars.
 
 Not yet handled: notices (13F-NT and 13F-NT/A), amendments for a quarter with no original 13F-HR,
 mapping rows to `securities` (rows keep their reported CUSIPs with `security_id` empty), and

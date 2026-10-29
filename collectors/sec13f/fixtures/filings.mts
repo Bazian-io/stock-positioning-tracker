@@ -18,7 +18,7 @@ export function sourceFiling(text = sample, overrides: Partial<SourceFiling> = {
 }
 
 // The sample as a 13F-HR/A cover page; amendmentNo is omitted when number is null.
-export function amendmentText(type: string, number: number | null): string {
+export function amendmentText(type: string, number: number | string | null): string {
   const amendmentNo = number === null ? "" : `<amendmentNo>${number}</amendmentNo>`;
   return sample
     .replace("<TYPE>13F-HR\n", "<TYPE>13F-HR/A\n")

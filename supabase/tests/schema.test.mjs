@@ -144,6 +144,25 @@ test("completion requires matching source counts and totals; incomplete data sta
   assert.ok((await db.query("select validated_at from public.filings")).rows[0].validated_at);
 });
 
+test("a CIK can count for an investor from a quarter end on", async () => {
+  const owner = await investor();
+  await insert("investor_ciks", { cik: "0002026053", investor_id: owner.id, entity_name: "Pershing Square, Inc.",
+    source_reference: "https://www.sec.gov/example", first_report_period: "2026-06-30" });
+  await rejected(`insert into public.investor_ciks (cik, investor_id, entity_name, source_reference, first_report_period)
+    values ('0009999999', $1, 'Example', 'https://www.sec.gov/example', '2026-06-15')`, [owner.id], /check constraint/);
+});
+
+test("completion accepts a summary total that differs from the rows only by rounding", async () => {
+  const rows = [{ quantity: 10, reported_value: 100 }, { quantity: 10, reported_value: 100 }];
+  // Each of the 2 rows is rounded to a whole unit, so the total may differ by up to 1.
+  for (const total of [199, 201]) {
+    const rounded = await filing({ reported_total_value: total }, rows, false);
+    await db.query("update public.filings set import_status = 'complete' where id = $1", [rounded.id]);
+  }
+  const off = await filing({ reported_total_value: 202 }, rows, false);
+  await rejected("update public.filings set import_status = 'complete' where id = $1", [off.id], /row count or value total/);
+});
+
 test("quarterly portfolios apply additions, then restatements, then later additions", async () => {
   const original = await filing();
   const amendment = {

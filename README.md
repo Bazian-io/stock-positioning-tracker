@@ -40,8 +40,8 @@ key reaches the browser. Public readers see only fully validated filings.
 - Nine tables: investors, their CIKs, securities, security identifiers, conversion ratios from
   corporate actions, filings, holdings, short interest and collection runs. Plus research views that turn raw filings into quarterly
   portfolios and positions.
-- The database itself verifies each filing's row count and value total against the SEC summary
-  before accepting it. Completed filings cannot be changed.
+- The database itself verifies each filing's row count and value total (within rounding) against
+  the SEC summary before accepting it. Completed filings cannot be changed.
 - Amendments are applied automatically: a restatement replaces a report, and a new-holdings
   amendment adds to it. Replaced filings stay stored as history.
 

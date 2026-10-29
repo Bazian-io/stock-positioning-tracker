@@ -136,6 +136,9 @@ test("company names and share classes are read from both sources' spellings", ()
   assert.ok(sameCompany("BANK OF NY MELLON CORP", "Bank of New York Mellon Corp"));
   assert.ok(sameCompany("AIR PRODUCTS AND CHEMICALS I", "Air Products & Chemicals, Inc."));
   assert.ok(sameCompany("PUBLIC SERVICE ENTERPRISE GP", "PUBLIC SERVICE ENTERPRISE GROUP INC"));
+  // Filers append the title of class.
+  assert.ok(sameCompany("UNITED AIRLS HLDGS INC OPTIONS", "United Airlines Holdings, Inc."));
+  assert.ok(sameCompany("PINDUODUO INC SPONSORED ADS", "PINDUODUO INC"));
   // A shared common word alone is not enough; a brand unrelated to the legal name is left for a person.
   assert.ok(!sameCompany("FIRST SOLAR INC", "FIRST REPUBLIC BANK"));
   assert.ok(!sameCompany("AMERICAN EXPRESS CO", "AMERICAN AIRLINES GROUP INC"));
@@ -250,6 +253,13 @@ test("a CUSIP's start date moves back only to an earlier filing that names the s
   });
   assert.deepEqual(planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 2 }, "NVIDIA CORP", reported), {
     problem: "the CUSIP is recorded for more than one period",
+  });
+  // A renamed company: filers used the old name until the rename; a person confirms it.
+  const facebook = { ...reported, reportedNames: ["FACEBOOK INC CL A", "META PLATFORMS INC CL A"] };
+  assert.ok(planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 1 }, "Meta Platforms, Inc.", facebook) !== null
+    && "problem" in planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 1 }, "Meta Platforms, Inc.", facebook)!);
+  assert.deepEqual(planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 1 }, "Meta Platforms, Inc.", facebook, true), {
+    validFrom: "2024-06-30", sourceReference: "https://www.sec.gov/x.txt",
   });
 });
 

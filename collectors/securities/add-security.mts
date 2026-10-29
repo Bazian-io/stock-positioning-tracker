@@ -8,7 +8,7 @@
 //        npm run add:security -- --alias G6693N103 --ticker NU [--dry-run]
 //        npm run add:security -- --predecessor 531229748 --ticker LLYVA --until 2025-12-15 --source <official URL> [--dry-run]
 //        npm run add:security -- --conversion 82968B103 --ticker SIRI --ratio 0.1 --date 2024-09-09 --description <text> --source <official URL> [--dry-run]
-//        npm run add:security -- --extend-windows [--dry-run]
+//        npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]
 import { parseArgs } from "node:util";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { lastQuarterBefore, nextQuarter } from "../../src/lib/stock.ts";
@@ -365,7 +365,8 @@ async function addConversion(
 
 // Moves recorded CUSIPs' start dates back to the earliest quarter our filings report them, after older
 // quarters have been imported.
-async function extendWindows(db: SupabaseClient, dryRun: boolean) {
+// confirmedNames: CUSIPs whose filers used a name the company had before a rename, checked by a person.
+async function extendWindows(db: SupabaseClient, dryRun: boolean, confirmedNames: string[]) {
   const [identifiers, securities] = await Promise.all([
     loadAll<{ id: string; security_id: string; identifier_value: string; valid_from: string }>((from, to) => db.from("security_identifiers")
       .select("id, security_id, identifier_value, valid_from").eq("identifier_type", "cusip").order("id").range(from, to), "Read CUSIPs"),
@@ -379,7 +380,8 @@ async function extendWindows(db: SupabaseClient, dryRun: boolean) {
   for (const row of identifiers) {
     const name = securities.find((security) => security.id === row.security_id)?.issuer_name ?? "";
     const recordedTimes = identifiers.filter((other) => other.identifier_value === row.identifier_value).length;
-    const plan = planEarlierStart({ validFrom: row.valid_from, recordedTimes }, name, evidence.get(row.identifier_value) ?? null);
+    const plan = planEarlierStart({ validFrom: row.valid_from, recordedTimes }, name, evidence.get(row.identifier_value) ?? null,
+      confirmedNames.includes(row.identifier_value));
     if (plan && "problem" in plan) problems.push(`  ${row.identifier_value} (${name}): ${plan.problem}`);
     else if (plan) moves.push({ id: row.id, cusip: row.identifier_value, from: row.valid_from, ...plan });
   }
@@ -414,6 +416,7 @@ async function main() {
       description: { type: "string" },
       "extend-windows": { type: "boolean", default: false },
       "stated-one-for-one": { type: "boolean", default: false },
+      "confirm-names": { type: "string" },
       "dry-run": { type: "boolean", default: false },
     },
   });
@@ -422,7 +425,7 @@ async function main() {
     + "       npm run add:security -- --alias <mistyped CUSIP> --ticker <TICKER> [--dry-run]\n"
     + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--stated-one-for-one] [--dry-run]\n"
     + "       npm run add:security -- --conversion <CUSIP> --ticker <TICKER> --ratio <shares per share> --date <date> --description <text> --source <official URL> [--dry-run]\n"
-    + "       npm run add:security -- --extend-windows [--dry-run]";
+    + "       npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]";
   const db = () => connect(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SECRET_KEY"));
   const modes = [values.investor, values.cusip, values.alias, values.predecessor, values.conversion, values["extend-windows"] || undefined]
     .filter((mode) => mode !== undefined);
@@ -443,7 +446,8 @@ async function main() {
       ratio: values.ratio.trim(), date: values.date.trim(), description: values.description, source: values.source.trim(),
     }, values["dry-run"]);
   } else if (values["extend-windows"] && !values.ticker && !values.top) {
-    await extendWindows(db(), values["dry-run"]);
+    const confirmed = (values["confirm-names"] ?? "").split(",").map((cusip) => cusip.trim().toUpperCase()).filter(Boolean);
+    await extendWindows(db(), values["dry-run"], confirmed);
   } else {
     throw new Error(usage);
   }

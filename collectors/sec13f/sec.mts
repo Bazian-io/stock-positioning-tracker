@@ -21,8 +21,14 @@ export type FilingIndexEntry = {
 // amendments for that period, oldest first.
 export type CikFilings = { original: FilingIndexEntry | null; amendments: FilingIndexEntry[] };
 
-// A quarter's original filing and its amendments across all of an investor's CIKs.
-export type QuarterFilings = { reportDate: string; original: FilingIndexEntry; amendments: FilingIndexEntry[] };
+// A quarter's original filing and its amendments across all of an investor's CIKs. supersededAmendments:
+// amendments filed before the original, which amended an earlier original that it replaced.
+export type QuarterFilings = {
+  reportDate: string;
+  original: FilingIndexEntry;
+  amendments: FilingIndexEntry[];
+  supersededAmendments: FilingIndexEntry[];
+};
 
 // An SEC entity's names over time and the quarters of its original 13F-HR reports.
 export type CikHistory = {
@@ -149,7 +155,9 @@ export async function findFiling(sec: SecClient, cik: string, form: string, repo
 
 // A quarter's original 13F-HR and its amendments across every CIK an investor has filed under,
 // for example before and after a corporate reorganization; without a quarter, the latest quarter
-// any of them reported. Exactly one CIK may have filed the quarter's original report.
+// any of them reported. Exactly one CIK may have filed the quarter's original report. When a filer
+// filed the original again, the latest one counts, and amendments filed before it amended the earlier
+// one: State Street restated Q4 2022 at 20:20 on 15 May 2023, then filed it as an original at 21:20.
 export async function findQuarterFilings(sec: SecClient, ciks: string[], reportDate?: string): Promise<QuarterFilings> {
   const found: CikFilings[] = [];
   for (const cik of ciks) found.push(await findFiling(sec, cik, "13F-HR", reportDate));
@@ -165,7 +173,14 @@ export async function findQuarterFilings(sec: SecClient, ciks: string[], reportD
     const listed = originals.map((original) => `${original.accessionNumber} (CIK ${original.cik})`).join(", ");
     throw new Error(`More than one CIK filed a 13F-HR for ${quarter}: ${listed}`);
   }
-  return { reportDate: quarter, original: originals[0], amendments: found.flatMap((filings) => filings.amendments).sort(byAcceptance) };
+  const amendments = found.flatMap((filings) => filings.amendments).sort(byAcceptance);
+  const after = (entry: FilingIndexEntry) => Date.parse(entry.acceptedAt) > Date.parse(originals[0].acceptedAt);
+  return {
+    reportDate: quarter,
+    original: originals[0],
+    amendments: amendments.filter(after),
+    supersededAmendments: amendments.filter((entry) => !after(entry)),
+  };
 }
 
 // An SEC entity's names over time and every quarter it filed an original 13F-HR for, from all of
@@ -182,6 +197,14 @@ export async function cikHistory(sec: SecClient, cik: string): Promise<CikHistor
     formerNames: (index.formerNames ?? []).map((former) => ({ name: former.name, until: former.to.slice(0, 10) })),
     reportPeriods: [...new Set(entries.filter((entry) => entry.form === "13F-HR").map((entry) => entry.reportDate))].sort(),
   };
+}
+
+export type CikLink = { cik: string; firstReportPeriod: string | null };
+
+// The investor's CIKs whose reports count for a quarter: a CIK linked from a later quarter is left out
+// (Pershing Square, Inc. counts from 2026-06-30). Without a quarter (the latest), every CIK.
+export function ciksForQuarter(links: CikLink[], reportDate: string | undefined): string[] {
+  return links.filter((link) => !reportDate || !link.firstReportPeriod || link.firstReportPeriod <= reportDate).map((link) => link.cik);
 }
 
 export function fullSubmissionUrl(cik: string, accessionNumber: string): string {

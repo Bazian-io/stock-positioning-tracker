@@ -107,10 +107,13 @@ export function shareClassOf(figiName: string): string | null {
   return match ? `Class ${match[1]}` : null;
 }
 
-// Legal forms, connecting words and share descriptions: they say nothing about which company it is.
+// Legal forms, connecting words and share descriptions (13F filers append the title of class, such as
+// "COM", "SPONSORED ADS" or "OPTIONS"): they say nothing about which company it is.
 const LEGAL_WORDS = new Set([
   "THE", "OF", "AND", "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COS", "COMPANY", "LTD", "LIMITED",
   "PLC", "LLC", "LP", "NV", "SA", "AG", "SE", "NEW", "DEL", "DE", "CL", "CLASS", "COM", "SHS", "SHARES",
+  "COMMON", "STOCK", "STK", "ORD", "ORDINARY", "ADR", "ADS", "SPONSORED", "SPON", "OPTIONS", "OPTION", "CALL", "PUT",
+  "SER", "SERIES", "UNIT", "UNITS",
 ]);
 // Words that say what kind of company a name is, not which one.
 const GENERIC_WORDS = new Set([...LEGAL_WORDS, "HOLDINGS", "HOLDING", "GROUP", "TRUST", "TR"]);
@@ -138,7 +141,7 @@ const ABBREVIATIONS: Record<string, string> = {
   WKS: "WORKS", CTZNS: "CITIZENS", MTRS: "MOTORS", AIRLS: "AIRLINES", TR: "TRUST", PRODS: "PRODUCTS", CHEMS: "CHEMICALS",
   CHEM: "CHEMICAL", MFG: "MANUFACTURING", MATLS: "MATERIALS", HLTH: "HEALTH", MED: "MEDICAL", UTD: "UNITED",
   COMMUNICATNS: "COMMUNICATIONS", SCIENCE: "SCIENCES", TECHNOLOGIE: "TECHNOLOGIES", INVT: "INVESTMENT", GP: "GROUP",
-  GEN: "GENERAL", NY: "NEW YORK",
+  GEN: "GENERAL", NY: "NEW YORK", PMTS: "PAYMENTS",
 };
 
 // A name's words, upper case and written out ("M & T BK CORP" → M, T, BANK, CORP).
@@ -302,16 +305,18 @@ export function planAlias(
 
 // A recorded CUSIP's start date is the earliest quarter our filings reported it when it was added. Once
 // older quarters are imported, filings may report it earlier; its start then moves back to that quarter,
-// with that filing as evidence, as long as every name filers used matches the stock. A CUSIP recorded
-// more than once (for different periods) is left for a person.
+// with that filing as evidence, as long as every name filers used matches the stock, or a person has
+// confirmed a renamed company (Facebook, now Meta Platforms). A CUSIP recorded more than once (for
+// different periods) is left for a person.
 export function planEarlierStart(
   recorded: { validFrom: string; recordedTimes: number },
   stockName: string,
   filings: FilingEvidence | null,
+  namesConfirmed = false, // A person has confirmed the filers' names are the company's former names.
 ): { validFrom: string; sourceReference: string } | { problem: string } | null {
   if (!filings || filings.firstPeriod >= recorded.validFrom) return null;
   if (recorded.recordedTimes > 1) return { problem: "the CUSIP is recorded for more than one period" };
-  const mismatch = filings.reportedNames.find((name) => !sameCompany(name, stockName));
+  const mismatch = namesConfirmed ? undefined : filings.reportedNames.find((name) => !sameCompany(name, stockName));
   if (mismatch) return { problem: `filers reported it as "${mismatch}", which does not match ${stockName}` };
   return { validFrom: filings.firstPeriod, sourceReference: filings.firstSourceUrl };
 }

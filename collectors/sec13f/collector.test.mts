@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { reportedPortfolio } from "./amendments.mts";
 import { amendmentText, newRows, sample, sampleRows, sourceFiling, variant } from "./fixtures/filings.mts";
-import { parseFullSubmission, toUnits, valueMultiplier } from "./parse.mts";
+import { apparentValueUnit, parseFullSubmission, storedValueMultiplier, toUnits, valueMultiplier, type Holding } from "./parse.mts";
 import {
-  cikHistory, createSecClient, findFiling, findQuarterFilings, fullSubmissionUrl, normalizeCik, normalizeQuarter,
+  cikHistory, ciksForQuarter, createSecClient, findFiling, findQuarterFilings, fullSubmissionUrl, normalizeCik, normalizeQuarter,
   quarterRange, type SecClient,
 } from "./sec.mts";
 import { sourceRow, unreportedFields } from "./source-row.mts";
@@ -170,10 +170,12 @@ test("raw_row keeps only what the columns cannot reproduce, and the SEC row is r
   assert.throws(() => unreportedFields({ ...holdings[0], raw: { cusip: holdings[0].cusip } }), /without losing source fields/);
 });
 
-test("rejects filings whose information table disagrees with the summary page", () => {
+test("rejects filings whose information table disagrees with the summary page by more than rounding", () => {
+  // Each of the 4 rows is rounded to a whole unit, so the total may differ by up to 2.
+  assert.equal(parseFullSubmission(sample.replace("<tableValueTotal>4550<", "<tableValueTotal>4552<")).valueTotal, "4552");
   assert.throws(
-    () => parseFullSubmission(sample.replace("<tableValueTotal>4550<", "<tableValueTotal>4551<")),
-    /values sum to 4550; the summary page reports 4551/,
+    () => parseFullSubmission(sample.replace("<tableValueTotal>4550<", "<tableValueTotal>4553<")),
+    /values sum to 4550; the summary page reports 4553/,
   );
   assert.throws(
     () => parseFullSubmission(sample.replace("<tableEntryTotal>4<", "<tableEntryTotal>5<")),
@@ -203,8 +205,18 @@ test("reads the amendment type and number from 13F-HR/A cover pages", () => {
   assert.equal(newHoldings.amendmentType, "new_holdings");
   assert.equal(newHoldings.amendmentNumber, 2);
   assert.equal(parseFullSubmission(amendmentText("RESTATEMENT", 1)).amendmentType, "restatement");
+  // Some filers pad the number.
+  assert.equal(parseFullSubmission(amendmentText("RESTATEMENT", "01")).amendmentNumber, 1);
   assert.throws(() => parseFullSubmission(amendmentText("CORRECTION", 1)), /Unsupported amendment type: CORRECTION/);
   assert.throws(() => parseFullSubmission(amendmentText("RESTATEMENT", null)), /Invalid amendmentNo/);
+});
+
+test("a CIK linked from a quarter counts only from that quarter on", () => {
+  // Pershing Square Capital Management reported the portfolio until Q1 2026; Pershing Square, Inc. from Q2 2026.
+  const links = [{ cik: "0001336528", firstReportPeriod: null }, { cik: "0002026053", firstReportPeriod: "2026-06-30" }];
+  assert.deepEqual(ciksForQuarter(links, "2025-12-31"), ["0001336528"]);
+  assert.deepEqual(ciksForQuarter(links, "2026-06-30"), ["0001336528", "0002026053"]);
+  assert.deepEqual(ciksForQuarter(links, undefined), ["0001336528", "0002026053"]);
 });
 
 test("value units follow the filing date, not the reporting quarter", () => {
@@ -212,6 +224,35 @@ test("value units follow the filing date, not the reporting quarter", () => {
   assert.equal(valueMultiplier("2023-01-03T15:00:00.000Z"), 1);
   assert.equal(toUnits("12.5"), BigInt(125_000));
   assert.equal(toUnits("577211815.0000"), toUnits("577211815"));
+});
+
+test("values that look like the other unit are refused until a person confirms thousands", () => {
+  const holding = (value: string, quantity: string, extra: Partial<Holding> = {}) =>
+    ({ value, quantity, quantityType: "SH", positionType: "long", ...extra }) as Holding;
+  // Five stocks at about $205 a share, as dollars and as thousands of dollars.
+  const counts = ["200000", "10000", "5000", "3000", "1000"];
+  const dollars = [...counts.map((count) => holding(String(Number(count) * 205), count)), holding("100", "1", { positionType: "call" })];
+  const thousands = counts.map((count) => holding(String(Number(count) * 0.205), count));
+  assert.deepEqual(apparentValueUnit(dollars), { unit: "dollars", valuePerShare: 205 });
+  assert.deepEqual(apparentValueUnit(thousands), { unit: "thousands", valuePerShare: 0.205 });
+  assert.equal(apparentValueUnit([holding("100", "100")]).unit, "unclear");
+  assert.equal(apparentValueUnit([]).unit, "unclear");
+  // D. E. Shaw's one-row amendment: 199,999 warrants worth $22,020 in dollars. Too few rows to judge.
+  assert.deepEqual(apparentValueUnit([holding("22020", "199999")]), { unit: "unclear", valuePerShare: 22020 / 199999 });
+
+  const after2023 = "2026-08-13T16:00:00.000Z";
+  const before2023 = "2022-11-14T21:01:07.000Z";
+  assert.deepEqual(storedValueMultiplier(after2023, apparentValueUnit(dollars), false), { multiplier: 1 });
+  assert.deepEqual(storedValueMultiplier(before2023, apparentValueUnit(thousands), false), { multiplier: 1000 });
+  // Baupost and Duquesne kept reporting thousands after 2023: refused, or stored as thousands once confirmed.
+  const refused = storedValueMultiplier(after2023, apparentValueUnit(thousands), false);
+  assert.ok("problem" in refused && /thousands of dollars \(median value per share 0.205\).*--values-in-thousands/.test(refused.problem));
+  assert.deepEqual(storedValueMultiplier(after2023, apparentValueUnit(thousands), true), { multiplier: 1000 });
+  // Confirming thousands never changes a filing that is in dollars.
+  assert.deepEqual(storedValueMultiplier(after2023, apparentValueUnit(dollars), true), { multiplier: 1 });
+  assert.ok("problem" in storedValueMultiplier(before2023, apparentValueUnit(dollars), false));
+  // When the unit is unclear, SEC's rule decides.
+  assert.deepEqual(storedValueMultiplier(after2023, { unit: "unclear", valuePerShare: 1 }, false), { multiplier: 1 });
 });
 
 test("SEC requests require a contact User-Agent and use EDGAR archive paths", () => {
@@ -291,6 +332,28 @@ test("a quarter is found under whichever of an investor's CIKs reported it", asy
   assert.deepEqual(handover.amendments.map((entry) => [entry.cik, entry.accessionNumber]), [["0000000001", "0000000001-24-000002"]]);
   assert.equal((await findQuarterFilings(sec, ciks, "2023-09-30")).original.accessionNumber, "0000000002-23-000004");
   await assert.rejects(findQuarterFilings(sec, ciks, "2022-12-31"), /No 13F-HR filing for 2022-12-31 in SEC's index for CIK 0000000001, 0000000002/);
+});
+
+test("amendments filed before a refiled original belong to the earlier original", async () => {
+  // State Street, Q4 2022: original in February, restatement at 20:20 on 15 May 2023, refiled as an original at 21:20.
+  const responses: Record<string, unknown> = {
+    "https://data.sec.gov/submissions/CIK0000093751.json": {
+      filings: {
+        recent: {
+          form: ["13F-HR", "13F-HR/A", "13F-HR"],
+          accessionNumber: ["0000093751-23-000567", "0000093751-23-000581", "0000093751-23-000476"],
+          reportDate: ["2022-12-31", "2022-12-31", "2022-12-31"],
+          acceptanceDateTime: ["2023-05-15T21:20:04.000Z", "2023-05-15T20:20:37.000Z", "2023-02-14T13:45:41.000Z"],
+        },
+        files: [],
+      },
+    },
+  };
+  const sec: SecClient = { async get(url) { return { url, text: JSON.stringify(responses[url]), sha256: "" }; } };
+  const quarter = await findQuarterFilings(sec, ["0000093751"], "2022-12-31");
+  assert.equal(quarter.original.accessionNumber, "0000093751-23-000567");
+  assert.deepEqual(quarter.amendments, []);
+  assert.deepEqual(quarter.supersededAmendments.map((entry) => entry.accessionNumber), ["0000093751-23-000581"]);
 });
 
 test("a quarter reported under two of an investor's CIKs is refused", async () => {

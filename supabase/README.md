@@ -9,7 +9,7 @@ They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 | Table | Purpose |
 | --- | --- |
 | `investors` | Tracked filing managers, identified by zero-padded 10-digit CIKs, with a permanent URL `slug` assigned when each is added. |
-| `investor_ciks` | Every CIK an investor has filed under, e.g. before and after a reorganization; each CIK belongs to one investor. |
+| `investor_ciks` | Every CIK an investor has filed under, e.g. before and after a reorganization; each CIK belongs to one investor, optionally only from a given quarter (`first_report_period`). |
 | `securities` | Stable internal identities for security/share classes and the short-interest watchlist flag. |
 | `security_identifiers` | Verified CUSIP, ticker, FIGI and provider-symbol mappings with validity periods. |
 | `security_conversions` | Official ratios from corporate actions: holders of one CUSIP received shares of a stock (Sirius XM's 2024 merger: 0.1 new share per old share). Holdings are not adjusted. |

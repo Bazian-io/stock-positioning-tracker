@@ -11,6 +11,9 @@ export const PAGE_SIZE = 1000; // Supabase's default maximum rows per API respon
 // OpenFIGI without an API key: 25 requests a minute, 10 identifiers per request.
 export const OPENFIGI_BATCH = 10;
 export const OPENFIGI_SPACING_MS = 2_500;
+// CUSIPs per filing-evidence query: with hundreds of thousands of holdings, 100 at a time took about 6
+// seconds a page and hit the database's statement timeout; 25 take well under a second.
+const EVIDENCE_BATCH = 25;
 
 export function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -71,10 +74,10 @@ export async function openFigi(cusips: string[], { includeUnlisted = false } = {
 export async function filingEvidence(db: SupabaseClient, cusips: string[]): Promise<Map<string, FilingEvidence>> {
   type Row = { reported_cusip: string; report_period: string; reported_issuer: string; reported_class: string | null; filing_id: string };
   const rows: Row[] = [];
-  for (let i = 0; i < cusips.length; i += 100) {
+  for (let i = 0; i < cusips.length; i += EVIDENCE_BATCH) {
     rows.push(...await loadAll<Row>((from, to) => db.from("portfolio_holdings")
       .select("reported_cusip, report_period, reported_issuer, reported_class, filing_id")
-      .in("reported_cusip", cusips.slice(i, i + 100))
+      .in("reported_cusip", cusips.slice(i, i + EVIDENCE_BATCH))
       .order("report_period").order("filed_at").order("filing_id").order("source_row")
       .range(from, to), "Read holdings"));
   }
