@@ -8,7 +8,7 @@ historical positions to show how institutions and the wider market are positione
 
 ## Objectives
 
-- Five years of quarterly 13F holdings for about 30 institutional investors.
+- Five years of quarterly 13F holdings for about 20 institutional investors.
 - Short-interest history for a watchlist of about 40–50 stocks.
 - Historical comparisons, charts and research dashboards per investor and per stock.
 - Automated, scheduled data collection.
@@ -55,8 +55,12 @@ key reaches the browser. Public readers see only fully validated filings.
 
 **Web app**
 
+- Two research sections, Investors and Stocks, linked from the homepage and the main navigation.
+- Investors page: every investor in the database with its latest quarter, reported value and
+  history.
 - Berkshire Hathaway dashboard: portfolio value by quarter (chart and table), quarter selection,
   largest holdings, and the SEC filings behind each quarter with links to EDGAR.
+- Stocks page: a placeholder describing the planned Stock Analysis section.
 
 ## Current data
 
@@ -74,11 +78,11 @@ security-mapping data yet.
 
 - **Short-interest collector.** The database tables and views exist; nothing fills them yet.
 - **Remaining investors.** Only Berkshire Hathaway has full history. BlackRock has one quarter,
-  and the other ~28 investors have not been imported.
-- **Stock-level research.** Holdings keep the CUSIP reported in each filing. They are not yet
-  mapped to securities and tickers, so stocks cannot be compared across investors.
-- **Investor pages beyond Berkshire.** The dashboard is built for Berkshire Hathaway only.
-  BlackRock's data is stored but not shown.
+  and the other ~18 investors have not been imported.
+- **Stock Analysis.** Holdings keep the CUSIP reported in each filing. They are not yet mapped
+  to securities and tickers, so the Stocks section is a placeholder.
+- **Investor dashboards beyond Berkshire.** The Investors page lists every investor, but only
+  Berkshire Hathaway has a dashboard; BlackRock's holdings are stored but not shown.
 - **Automation.** Collection runs manually, one investor at a time. There is no investor list
   and no scheduled job (GitHub Actions is planned).
 

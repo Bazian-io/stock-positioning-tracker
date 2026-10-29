@@ -41,6 +41,43 @@ export async function getInvestor(cik: string): Promise<Investor | null> {
   );
 }
 
+export type InvestorSummary = Investor & {
+  quarterCount: number;
+  firstQuarter: string | null; // Report periods; null when no quarter has been imported yet.
+  latestQuarter: string | null;
+  latestValueUsd: number | null;
+};
+
+// Every investor in the database, by name, with the quarters it has reported (quarterly_portfolios).
+export async function getInvestorSummaries(): Promise<InvestorSummary[]> {
+  const db = readOnlySupabase();
+  const investors = await load<Investor[]>(db.from("investors").select("id, name, cik").order("name"), "investors");
+  const quarters: { investor_id: string; report_period: string; value_usd: string }[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const page = await load<typeof quarters>(
+      db.from("quarterly_portfolios")
+        .select("investor_id, report_period, value_usd::text")
+        .order("investor_id")
+        .order("report_period")
+        .range(from, from + PAGE_SIZE - 1),
+      "quarterly portfolios",
+    );
+    quarters.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return investors.map((investor) => {
+    const reported = quarters.filter((quarter) => quarter.investor_id === investor.id); // Oldest first.
+    const latest = reported.at(-1);
+    return {
+      ...investor,
+      quarterCount: reported.length,
+      firstQuarter: reported[0]?.report_period ?? null,
+      latestQuarter: latest?.report_period ?? null,
+      latestValueUsd: latest ? Number(latest.value_usd) : null,
+    };
+  });
+}
+
 // One row per quarter from the quarterly_portfolios research view, oldest first. Each value
 // already applies amendments: the latest original or restatement plus later new holdings.
 export async function getQuarterSummaries(investorId: string): Promise<QuarterSummary[]> {

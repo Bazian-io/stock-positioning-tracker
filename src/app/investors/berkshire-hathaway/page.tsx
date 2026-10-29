@@ -69,7 +69,7 @@ export default async function BerkshireHathawayPage({
     <QuarterNavigation>
       <main className={styles.page}>
         <nav className={styles.breadcrumb} aria-label="Breadcrumb">
-          <Link href="/">Investors</Link>
+          <Link href="/investors">Investors</Link>
           <span aria-hidden="true">/</span>
           <span>Berkshire Hathaway</span>
         </nav>

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { SiteNav } from "@/components/site-nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -23,9 +24,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </svg>
               Stock Positioning Tracker
             </Link>
-            <nav className="site-nav" aria-label="Main">
-              <Link href="/investors/berkshire-hathaway">Berkshire Hathaway</Link>
-            </nav>
+            <SiteNav />
           </div>
         </header>
         <div className="site-main">{children}</div>

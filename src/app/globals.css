@@ -118,6 +118,12 @@ a {
   fill: var(--accent);
 }
 
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}
+
 .site-nav a {
   color: var(--text-secondary);
   font-size: 14px;
@@ -127,6 +133,12 @@ a {
 .site-nav a:hover {
   color: var(--text-primary);
   text-decoration: underline;
+}
+
+/* The current page, or the section it belongs to. */
+.site-nav a[aria-current] {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .site-main {
@@ -178,11 +190,17 @@ a {
   font-weight: 600;
 }
 
-.investor-card {
+.section-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.section-card {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 4px 16px;
-  align-items: center;
+  align-content: start;
   padding: 18px 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -192,24 +210,38 @@ a {
   text-decoration: none;
 }
 
-.investor-card:hover {
+.section-card:hover {
   border-color: var(--accent);
 }
 
-.investor-name {
+.section-name {
   font-size: 17px;
   font-weight: 650;
 }
 
-.investor-detail {
+.section-status {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+
+.section-detail {
   grid-column: 1;
   color: var(--text-secondary);
   font-size: 14px;
 }
 
-.investor-arrow {
-  grid-row: 1 / span 2;
+.section-arrow {
+  grid-row: 1;
   grid-column: 2;
   color: var(--accent);
   font-size: 20px;
+  line-height: 1.3;
 }
