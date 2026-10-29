@@ -42,9 +42,19 @@ test("an exact whole-number change in shares with the opposite move in value per
   assert.equal(quarterChange(held("2024-06-30", 400_000_000, 84_248_000_000), held("2024-03-31", 789_368_450, 135_360_000_000)).kind, "decreased");
   // An exact doubling bought at a steady price is a purchase.
   assert.equal(likelySplit(held("2026-03-31", 1_000_000, 100_000_000), held("2026-06-30", 2_000_000, 220_000_000)), null);
-  // A 10-for-1 split while the price rose 37% (as NVIDIA's did in Q2 2024), and a 1-for-10 reverse split.
+  // A 10-for-1 split while the price rose 37% (as NVIDIA's did in Q2 2024), and a 2-for-1 while it rose 10%.
   assert.equal(likelySplit(held("2024-03-31", 1_000_000, 900_000_000), held("2024-06-30", 10_000_000, 1_233_000_000)), 10);
-  assert.equal(likelySplit(held("2026-03-31", 1_000_000, 5_000_000), held("2026-06-30", 100_000, 4_800_000)), 0.1);
+  assert.equal(likelySplit(held("2026-03-31", 1_000_000, 200_000_000), held("2026-06-30", 2_000_000, 220_000_000)), 2);
+  // Round-number trades that the old rule called splits: selling exactly half while the price was flat or
+  // rose 15%, and doubling while it fell 25%.
+  assert.equal(likelySplit(held("2026-03-31", 400_000_000, 24e9), held("2026-06-30", 200_000_000, 12e9)), null);
+  assert.equal(likelySplit(held("2026-03-31", 400_000_000, 24e9), held("2026-06-30", 200_000_000, 13.8e9)), null);
+  assert.equal(likelySplit(held("2026-03-31", 10_000_000, 1e9), held("2026-06-30", 20_000_000, 1.5e9)), null);
+  // A 1-for-10 reverse split counts only when another investor's holding changed by the same ratio.
+  const reverse = [held("2026-03-31", 1_000_000, 5_000_000), held("2026-06-30", 100_000, 4_800_000)] as const;
+  assert.equal(likelySplit(...reverse), null);
+  assert.equal(likelySplit(...reverse, [0.1]), 0.1);
+  assert.equal(likelySplit(...reverse, [0.5]), null);
 });
 
 test("changes compare consecutive reported quarters; a missing report is never treated as zero", () => {

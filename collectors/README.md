@@ -92,11 +92,14 @@ npm run add:security -- --investor blackrock --top 500             # its 500 lar
 
 For each CUSIP the command checks its check digit; that OpenFIGI maps it to a listed US stock
 (common stock, ADR, REIT and the like; not ETFs, funds or preferred shares) with that ticker; that
-SEC's company ticker file lists the ticker on Nasdaq or NYSE (with `--investor`, also under a
-company name that matches OpenFIGI's); and that our filings report the CUSIP. It then adds a
-`securities` row and two `security_identifiers`: the CUSIP, valid from the earliest quarter our
-filings report it (that filing is the evidence), and the ticker on its exchange's MIC, valid from
-the day SEC's file was read. Each share class has its own CUSIP and ticker, so classes stay
+SEC's company ticker file lists the ticker (with `--investor`, also under a company name that
+matches OpenFIGI's); that Nasdaq's directory of US-listed securities lists it, not as an ETF, on an
+exchange SEC's file agrees with; and that our filings report the CUSIP. The exchange comes from
+Nasdaq's directory, because SEC's file labels NYSE American and NYSE Arca listings "NYSE": Nasdaq,
+NYSE, NYSE American, NYSE Arca, Cboe BZX and IEX are supported; the Texas Stock Exchange is not yet.
+It then adds a `securities` row and two `security_identifiers`: the CUSIP, valid from the earliest
+quarter our filings report it (that filing is the evidence), and the ticker on its exchange's MIC,
+valid from the day it was checked. Each share class has its own CUSIP and ticker, so classes stay
 separate; with `--investor` the class comes from OpenFIGI's name ("ALPHABET INC-CL A"). Holdings
 themselves are not changed. A CUSIP or ticker that is already recorded is left as it is.
 
@@ -110,8 +113,14 @@ skips what is already recorded. Skipped CUSIPs need a person:
   (Exxon Mobil's reorganization into ExxonMobil Holdings gave it a new one). OpenFIGI maps only
   listed securities, so an old CUSIP is never matched to a ticker that now belongs to its successor.
 - A ticker that is already recorded, or that two CUSIPs map to: decide which CUSIP it belongs to.
-- Names that do not match (OpenFIGI "P G & E CORP", SEC "PG&E Corp"): add it with `--cusip` and
-  `--ticker` after checking.
+- Names that do not match. Names are compared ignoring legal forms, spacing, punctuation, word order
+  and common 13F abbreviations ("P G & E CORP" and "PG&E Corp", "HORTON D R INC" and "DR HORTON
+  INC"), on their first distinctive word, skipping words many companies share (FIRST, AMERICAN,
+  ELECTRIC). A trading name unrelated to the legal name ("WABTEC", "Westinghouse Air Brake
+  Technologies") or a renamed company ("EQUITY RESIDENTIAL", now "Vivmark Residential") does not
+  match: check the evidence and add it with `--cusip` and `--ticker`. Different companies sharing a
+  family or place name can still match ("JOHNSON & JOHNSON", "Johnson Controls"), so names only back
+  up the other checks.
 
 ### Mistyped CUSIPs, earlier CUSIPs and start dates
 
@@ -140,7 +149,10 @@ record (`--source`, a company release or SEC filing) as evidence. It refuses a C
 listed or unknown to OpenFIGI, one whose dates would overlap the stock's other CUSIPs, names that do
 not match, and any conversion where no investor's share count carried over unchanged: share counts
 from a conversion at another ratio (Sirius XM's 2024 merger gave 0.8375 or 0.1 new shares) are not
-comparable, so those are not linked.
+comparable, so those are not linked. An investor that trades every quarter (BlackRock) rarely keeps a
+count unchanged; when the official record states one-for-one, add `--stated-one-for-one`, and every
+investor's value per share must instead stay within ×0.70 to ×1.45 across the conversion, as a share
+price does in a quarter (Sirius XM's old shares rose ×8.4, so they are still refused).
 
 Instead, `--conversion` records the ratio in `security_conversions`: holders of the converted CUSIP
 received that many shares of the stock per share on that date (Sirius XM's merger gave 0.1 new SIRI
@@ -166,8 +178,9 @@ npm run check:data -- --identities    # also re-checks every stock with OpenFIGI
 
 Lists what a person should review:
 
-- **Freshness:** each investor's latest quarter against the latest quarter whose 13F reports are due
-  (45 days after quarter end: 14 Feb, 15 May, 14 Aug and 14 Nov, or the next business day).
+- **Freshness:** each investor's latest quarter against the latest quarter whose 13F deadline has
+  passed (45 days after quarter end: 14 Feb, 15 May, 14 Aug and 14 Nov, or the next business day after
+  a weekend or Presidents' Day; for 2026, 17 Feb, 15 May, 14 Aug and 16 Nov).
 - **Stock links:** likely earlier CUSIPs (a holding that ends as an investor's holding of a stock
   starts with the same share count), mistyped CUSIPs, other CUSIPs under a stock's name (for example
   a predecessor converted at another ratio, which needs a person), holdings outside their CUSIP's

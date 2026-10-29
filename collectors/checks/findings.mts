@@ -1,6 +1,6 @@
 // Checks of the stored data that need no database: each takes rows already read and returns what a
 // person should review. Used by check-data.mts.
-import { likelySplit, type QuarterHolding } from "../../src/lib/stock.ts";
+import { exactShareRatio, likelySplit, type QuarterHolding } from "../../src/lib/stock.ts";
 
 // A position from portfolio_positions: one investor's rows for one security in one quarter, combined.
 export type Position = {
@@ -144,16 +144,22 @@ export function consecutivePairs(positions: Position[], reportedQuarters: Set<st
     reportPeriod: position.reportPeriod, state: "held", shares: position.shares, valueUsd: position.valueUsd,
     confidentialOmissions: false, unconfirmed: null, received: null,
   });
-  return longs.flatMap((current) => {
+  const pairs = longs.flatMap((current) => {
     const period = previousQuarter(current.reportPeriod);
     const previous = byKey.get(`${current.investorId}|${current.cusip}|${period}`);
     if (!previous || !current.cusip || !reportedQuarters.has(`${current.investorId}|${period}`)) return [];
-    return [{
+    return [{ previous, current, ratio: exactShareRatio(holding(previous), holding(current)) }];
+  });
+  // Other investors' exact share ratios for the same CUSIP and quarter confirm a reverse split.
+  return pairs.map(({ previous, current }) => {
+    const confirming = pairs.filter((other) => other.current.cusip === current.cusip && other.current.reportPeriod === current.reportPeriod
+      && other.current.investorId !== current.investorId && other.ratio !== null).map((other) => other.ratio ?? 0);
+    return {
       previous,
       current,
-      splitRatio: likelySplit(holding(previous), holding(current)),
+      splitRatio: likelySplit(holding(previous), holding(current), confirming),
       priceRatio: pricePerShare(current) / pricePerShare(previous),
-    }];
+    };
   });
 }
 
@@ -163,15 +169,21 @@ export function priceJumps(pairs: QuarterPair[], factor = 4): QuarterPair[] {
   return pairs.filter((pair) => pair.splitRatio === null && (pair.priceRatio > factor || pair.priceRatio < 1 / factor));
 }
 
-// The latest quarter end whose 13F filings are due: managers file within 45 days after a quarter ends.
+// A quarter's 13F filing deadline: 45 days after the quarter ends, or the next business day when that
+// falls on a weekend or federal holiday (SEC Rule 0-3). Of the federal holidays, only Presidents' Day
+// (the third Monday of February) can fall in the days after a 45th day (14 Feb, 15 May, 14 Aug, 14 Nov).
+export function filingDeadline(reportPeriod: string): string {
+  const date = new Date(`${reportPeriod}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 45);
+  const presidentsDay = () => date.getUTCMonth() === 1 && date.getUTCDay() === 1 && date.getUTCDate() >= 15 && date.getUTCDate() <= 21;
+  while (date.getUTCDay() === 0 || date.getUTCDay() === 6 || presidentsDay()) date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+// The latest quarter whose 13F filing deadline has passed.
 export function latestDueQuarter(today: string): { reportPeriod: string; dueDate: string } {
   const year = Number(today.slice(0, 4));
   const quarterEnds = [year - 1, year].flatMap((y) => ["03-31", "06-30", "09-30", "12-31"].map((end) => `${y}-${end}`));
-  const due = (reportPeriod: string) => {
-    const date = new Date(`${reportPeriod}T00:00:00Z`);
-    date.setUTCDate(date.getUTCDate() + 45);
-    return date.toISOString().slice(0, 10);
-  };
-  const reportPeriod = quarterEnds.filter((end) => due(end) <= today).at(-1) ?? quarterEnds[0];
-  return { reportPeriod, dueDate: due(reportPeriod) };
+  const reportPeriod = quarterEnds.filter((end) => filingDeadline(end) < today).at(-1) ?? quarterEnds[0];
+  return { reportPeriod, dueDate: filingDeadline(reportPeriod) };
 }

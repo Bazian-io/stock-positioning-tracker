@@ -1,8 +1,11 @@
-// Reading the sources that identify stocks: OpenFIGI, SEC's company ticker file and our filings.
+// Reading the sources that identify stocks: OpenFIGI, SEC's company ticker file, Nasdaq's directory of
+// US-listed securities and our filings.
 // Shared by add-security.mts (which writes) and the read-only data check.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSecClient } from "../sec13f/sec.mts";
-import { OPENFIGI_URL, openFigiJob, SEC_TICKERS_URL, type FilingEvidence } from "./identify.mts";
+import {
+  listingDirectory, NASDAQ_LISTED_URL, OPENFIGI_URL, openFigiJob, OTHER_LISTED_URL, SEC_TICKERS_URL, type FilingEvidence, type Listing,
+} from "./identify.mts";
 
 export const PAGE_SIZE = 1000; // Supabase's default maximum rows per API response.
 // OpenFIGI without an API key: 25 requests a minute, 10 identifiers per request.
@@ -97,6 +100,19 @@ export async function filingEvidence(db: SupabaseClient, cusips: string[]): Prom
 
 export async function secTickers() {
   return JSON.parse((await createSecClient(requireEnv("SEC_USER_AGENT")).get(SEC_TICKERS_URL)).text);
+}
+
+// Nasdaq's directory of every US-listed security, with its listing exchange, by ticker.
+export async function listings(): Promise<Map<string, Listing>> {
+  const read = async (url: string) => {
+    const response = await fetch(url, { headers: { "User-Agent": "stock-positioning-tracker" }, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`Nasdaq's symbol directory returned HTTP ${response.status}`);
+    return response.text();
+  };
+  const [nasdaqListed, otherListed] = await Promise.all([read(NASDAQ_LISTED_URL), read(OTHER_LISTED_URL)]);
+  const directory = listingDirectory(nasdaqListed, otherListed);
+  if (directory.size < 1000) throw new Error(`Nasdaq's symbol directory lists only ${directory.size} securities; it may be incomplete`);
+  return directory;
 }
 
 export const today = () => new Date().toISOString().slice(0, 10);

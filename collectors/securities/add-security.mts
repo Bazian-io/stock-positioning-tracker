@@ -14,11 +14,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { lastQuarterBefore, nextQuarter } from "../../src/lib/stock.ts";
 import { connect } from "../sec13f/store.mts";
 import {
-  markTickerConflicts, normalizeTicker, planAlias, planConversion, planEarlierStart, planPredecessor, planSecurity, sameCompany, secListing, shareClassOf,
+  LISTING_NAMES, markTickerConflicts, normalizeTicker, planAlias, planConversion, planEarlierStart, planPredecessor, planSecurity, sameCompany, secListing,
+  shareClassOf,
   usListing, type Candidate, type Continuity, type PlannedSecurity,
 } from "./identify.mts";
 import {
-  filingEvidence, loadAll, must, OPENFIGI_BATCH, OPENFIGI_SPACING_MS, openFigi, PAGE_SIZE, requireEnv, secTickers, today,
+  filingEvidence, listings, loadAll, must, OPENFIGI_BATCH, OPENFIGI_SPACING_MS, openFigi, PAGE_SIZE, requireEnv, secTickers, today,
 } from "./sources.mts";
 
 async function insertSecurity(db: SupabaseClient, plan: PlannedSecurity): Promise<string> {
@@ -54,18 +55,21 @@ async function addOne(db: SupabaseClient, cusip: string, ticker: string, shareCl
     return;
   }
 
-  const [figiResult] = await openFigi([cusip]);
+  const [[figiResult], secFile, directory] = await Promise.all([openFigi([cusip]), secTickers(), listings()]);
   const evidence = {
     cusip,
     ticker,
     figi: usListing(figiResult),
-    sec: secListing(await secTickers(), ticker),
+    sec: secListing(secFile, ticker),
+    listing: directory.get(ticker) ?? null,
     filings: (await filingEvidence(db, [cusip])).get(cusip) ?? null,
   };
   const { figi, filings } = evidence;
   console.log(`CUSIP ${cusip}, ticker ${ticker}`);
   console.log(`  OpenFIGI: ${figi ? `${figi.ticker}, ${figi.name}, ${figi.securityType} (${figi.marketSector}, FIGI ${figi.compositeFigi})` : "no US listing"}`);
   console.log(`  SEC:      ${evidence.sec ? `${evidence.sec.ticker}, ${evidence.sec.name}, ${evidence.sec.exchange} (CIK ${evidence.sec.cik})` : "ticker not found"}`);
+  console.log(`  Nasdaq:   ${evidence.listing ? `${evidence.listing.name}, listed on ${LISTING_NAMES[evidence.listing.exchange] ?? evidence.listing.exchange}`
+    + `${evidence.listing.etf ? ", an ETF" : ""}` : "not in the directory of US-listed securities"}`);
   console.log(`  Filings:  ${filings ? `reported ${filings.firstPeriod} to ${filings.latestPeriod} as ${filings.reportedNames.join("; ")}` : "none report this CUSIP"}`);
 
   const { plan, problems } = planSecurity(evidence, today(), shareClass);
@@ -111,12 +115,16 @@ async function addInvestorStocks(db: SupabaseClient, slug: string, top: number |
   console.log(`${investor.name}: ${cusips.length} reported stock CUSIPs, ${cusips.length - newCusips.length} already recorded.`);
   console.log(`Checking ${newCusips.length} with OpenFIGI (about ${Math.ceil(newCusips.length / OPENFIGI_BATCH * OPENFIGI_SPACING_MS / 60_000)} min), SEC and our filings…`);
 
-  const [figiResults, secFile, evidence] = await Promise.all([openFigi(newCusips), secTickers(), filingEvidence(db, newCusips)]);
+  const [figiResults, secFile, directory, evidence] = await Promise.all([openFigi(newCusips), secTickers(), listings(), filingEvidence(db, newCusips)]);
   const candidates: Candidate[] = newCusips.map((cusip, i) => {
     const figi = usListing(figiResults[i]);
     if (!figi) return { cusip, ticker: null, plan: null, problems: ["OpenFIGI has no US listing (not listed, or delisted)"] };
     const sec = secListing(secFile, figi.ticker);
-    const result = planSecurity({ cusip, ticker: figi.ticker, figi, sec, filings: evidence.get(cusip) ?? null }, today(), shareClassOf(figi.name));
+    const result = planSecurity(
+      { cusip, ticker: figi.ticker, figi, sec, listing: directory.get(figi.ticker) ?? null, filings: evidence.get(cusip) ?? null },
+      today(),
+      shareClassOf(figi.name),
+    );
     // No person chose this ticker, so the two sources must also name the same company.
     if (result.plan && sec && !sameCompany(figi.name, sec.name)) {
       return { cusip, ticker: figi.ticker, plan: null, problems: [`OpenFIGI names ${cusip} "${figi.name}" but SEC lists ${figi.ticker} as "${sec.name}"`] };
@@ -190,7 +198,7 @@ async function addAlias(db: SupabaseClient, alias: string, ticker: string, dryRu
 
 // An earlier CUSIP of a stock, replaced one-for-one in a corporate action, recorded as a CUSIP of the
 // stock until the conversion date.
-async function addPredecessor(db: SupabaseClient, cusip: string, ticker: string, until: string, source: string, dryRun: boolean) {
+async function addPredecessor(db: SupabaseClient, cusip: string, ticker: string, until: string, source: string, statedOneForOne: boolean, dryRun: boolean) {
   const [tickerRow] = await must<{ security_id: string }[]>(
     db.from("security_identifiers").select("security_id").eq("identifier_type", "ticker").eq("identifier_value", ticker)
       .lte("valid_from", today()).or(`valid_to.is.null,valid_to.gt.${today()}`),
@@ -223,23 +231,28 @@ async function addPredecessor(db: SupabaseClient, cusip: string, ticker: string,
     const next = nextQuarter(last);
     const current = stockCusips.filter((row) => row.valid_from <= next && (row.valid_to === null || next < row.valid_to)).map((row) => row.identifier_value);
     const [positions, reports, investors] = await Promise.all([
-      must<{ investor_id: string; report_period: string; reported_cusip: string; quantity: string }[]>(
-        db.from("portfolio_positions").select("investor_id, report_period, reported_cusip, quantity::text")
+      must<{ investor_id: string; report_period: string; reported_cusip: string; quantity: string; value_usd: string }[]>(
+        db.from("portfolio_positions").select("investor_id, report_period, reported_cusip, quantity::text, value_usd::text")
           .in("reported_cusip", [cusip, ...current]).in("report_period", [last, next]).eq("position_type", "long").eq("quantity_type", "SH"),
         "Read positions",
       ),
       must<{ investor_id: string }[]>(db.from("quarterly_portfolios").select("investor_id").eq("report_period", next), "Read reports"),
       must<{ id: string; slug: string }[]>(db.from("investors").select("id, slug"), "Read investors"),
     ]);
-    const shares = (investorId: string, period: string, cusips: string[]) => positions
+    const total = (investorId: string, period: string, cusips: string[], column: "quantity" | "value_usd") => positions
       .filter((row) => row.investor_id === investorId && row.report_period === period && cusips.includes(row.reported_cusip))
-      .reduce((sum, row) => sum + Number(row.quantity), 0);
+      .reduce((sum, row) => sum + Number(row[column]), 0);
     for (const investorId of new Set(positions.filter((row) => row.reported_cusip === cusip).map((row) => row.investor_id))) {
       if (!reports.some((row) => row.investor_id === investorId)) continue;
+      const before = total(investorId, last, [cusip], "quantity");
+      const after = total(investorId, next, current, "quantity");
+      const priceBefore = before > 0 ? total(investorId, last, [cusip], "value_usd") / before : 0;
+      const priceAfter = after > 0 ? total(investorId, next, current, "value_usd") / after : 0;
       continuity.push({
         investor: investors.find((row) => row.id === investorId)?.slug ?? investorId,
-        before: shares(investorId, last, [cusip]),
-        after: shares(investorId, next, current),
+        before,
+        after,
+        priceRatio: priceBefore > 0 && priceAfter > 0 ? priceAfter / priceBefore : null,
       });
     }
   }
@@ -250,7 +263,8 @@ async function addPredecessor(db: SupabaseClient, cusip: string, ticker: string,
   console.log(`  OpenFIGI: ${known.length > 0 ? `known as ${known[0].name}` : "not a known security"}${listed ? `, still listed as ${listed.ticker}` : ", no longer listed"}`);
   console.log(`  Filings:  ${filings ? `reported ${filings.firstPeriod} to ${filings.latestPeriod} as ${filings.reportedNames.join("; ")}` : "none report this CUSIP"}`);
   for (const row of continuity) {
-    console.log(`  Shares:   ${row.investor} ${row.before} under ${cusip} in ${filings?.latestPeriod}, ${row.after} of ${ticker} in the next quarter${row.before === row.after ? " (unchanged)" : ""}`);
+    console.log(`  Shares:   ${row.investor} ${row.before} under ${cusip} in ${filings?.latestPeriod}, ${row.after} of ${ticker} in the next quarter`
+      + `${row.before === row.after ? " (unchanged)" : ""}; value per share ×${row.priceRatio?.toFixed(2) ?? "?"}`);
   }
   console.log(`  Source:   ${source}`);
 
@@ -264,6 +278,7 @@ async function addPredecessor(db: SupabaseClient, cusip: string, ticker: string,
     until,
     source,
     continuity,
+    statedOneForOne,
   });
   if (!identifier) throw new Error(`Not recording ${cusip}:\n- ${problems.join("\n- ")}`);
   console.log(`  cusip  ${cusip} for ${ticker}, from ${identifier.valid_from} until ${identifier.valid_to}`);
@@ -398,13 +413,14 @@ async function main() {
       date: { type: "string" },
       description: { type: "string" },
       "extend-windows": { type: "boolean", default: false },
+      "stated-one-for-one": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
     },
   });
   const usage = "Usage: npm run add:security -- --cusip <CUSIP> --ticker <TICKER> [--share-class <name>] [--dry-run]\n"
     + "       npm run add:security -- --investor <slug> [--top <count>] [--dry-run]\n"
     + "       npm run add:security -- --alias <mistyped CUSIP> --ticker <TICKER> [--dry-run]\n"
-    + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--dry-run]\n"
+    + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--stated-one-for-one] [--dry-run]\n"
     + "       npm run add:security -- --conversion <CUSIP> --ticker <TICKER> --ratio <shares per share> --date <date> --description <text> --source <official URL> [--dry-run]\n"
     + "       npm run add:security -- --extend-windows [--dry-run]";
   const db = () => connect(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SECRET_KEY"));
@@ -420,7 +436,8 @@ async function main() {
   } else if (values.alias && values.ticker && !values.top) {
     await addAlias(db(), values.alias.trim().toUpperCase(), normalizeTicker(values.ticker), values["dry-run"]);
   } else if (values.predecessor && values.ticker && values.until && values.source && !values.top) {
-    await addPredecessor(db(), values.predecessor.trim().toUpperCase(), normalizeTicker(values.ticker), values.until.trim(), values.source.trim(), values["dry-run"]);
+    await addPredecessor(db(), values.predecessor.trim().toUpperCase(), normalizeTicker(values.ticker), values.until.trim(), values.source.trim(),
+      values["stated-one-for-one"], values["dry-run"]);
   } else if (values.conversion && values.ticker && values.ratio && values.date && values.description && values.source && !values.top) {
     await addConversion(db(), values.conversion.trim().toUpperCase(), normalizeTicker(values.ticker), {
       ratio: values.ratio.trim(), date: values.date.trim(), description: values.description, source: values.source.trim(),

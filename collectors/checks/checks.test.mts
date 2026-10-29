@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { nextQuarter, previousQuarter } from "../../src/lib/stock.ts";
 import { isValidCusip } from "../securities/identify.mts";
 import {
-  consecutivePairs, latestDueQuarter, likelyPredecessors, outsideWindows, priceDisagreements, priceJumps, suspectedTypos, type CusipRecord,
+  consecutivePairs, filingDeadline, latestDueQuarter, likelyPredecessors, outsideWindows, priceDisagreements, priceJumps, suspectedTypos, type CusipRecord,
   type Position,
 } from "./findings.mts";
 
@@ -45,16 +45,29 @@ test("values are compared between investors and between quarters, and splits are
   assert.deepEqual(pairs.map((pair) => [pair.current.issuer, pair.splitRatio]), [["AMAZON COM INC", 20], ["APPLE INC", null]]);
   // A value reported in thousands instead of dollars moves value per share about a thousandfold.
   assert.deepEqual(priceJumps(pairs).map((pair) => pair.current.issuer), ["APPLE INC"]);
+  // A 1-for-2 reverse split shows for both investors that held through it; one investor selling half does not.
+  const reverse = (investor: string, shares: number) => [
+    position(investor, "2026-03-31", "000000000", "EXAMPLE CO", shares, shares * 10),
+    position(investor, "2026-06-30", "000000000", "EXAMPLE CO", shares / 2, shares * 10.4),
+  ];
+  const both = new Set(["brk|2026-03-31", "brk|2026-06-30", "blk|2026-03-31", "blk|2026-06-30"]);
+  assert.deepEqual(consecutivePairs([...reverse("brk", 1000), ...reverse("blk", 4000)], both, previousQuarter).map((pair) => pair.splitRatio), [0.5, 0.5]);
+  assert.deepEqual(consecutivePairs(reverse("brk", 1000), both, previousQuarter).map((pair) => pair.splitRatio), [null]);
   const sameQuarter = [position("brk", "2026-06-30", "037833100", "APPLE INC", 100, 20_500), position("blk", "2026-06-30", "037833100", "APPLE INC", 200, 41_100)];
   assert.deepEqual(priceDisagreements(sameQuarter), []);
   assert.equal(priceDisagreements([sameQuarter[0], { ...sameQuarter[1], valueUsd: 41 }]).length, 1);
 });
 
-test("the latest quarter due is the last one whose 45-day filing deadline has passed", () => {
+test("13F deadlines fall 45 days after quarter end, moved past weekends and Presidents' Day", () => {
+  // SEC's 2026 deadlines: 17 Feb (14 Feb was a Saturday and 16 Feb Presidents' Day), 15 May, 14 Aug, 16 Nov.
+  assert.deepEqual(["2025-12-31", "2026-03-31", "2026-06-30", "2026-09-30"].map(filingDeadline), ["2026-02-17", "2026-05-15", "2026-08-14", "2026-11-16"]);
+  assert.deepEqual(["2026-12-31", "2027-03-31", "2027-06-30", "2027-09-30"].map(filingDeadline), ["2027-02-16", "2027-05-17", "2027-08-16", "2027-11-15"]);
+  // A quarter is due once its deadline day has passed.
   assert.deepEqual(latestDueQuarter("2026-10-29"), { reportPeriod: "2026-06-30", dueDate: "2026-08-14" });
-  assert.deepEqual(latestDueQuarter("2026-11-14"), { reportPeriod: "2026-09-30", dueDate: "2026-11-14" });
-  assert.deepEqual(latestDueQuarter("2027-01-10"), { reportPeriod: "2026-09-30", dueDate: "2026-11-14" });
-  assert.deepEqual(latestDueQuarter("2027-02-14"), { reportPeriod: "2026-12-31", dueDate: "2027-02-14" });
+  assert.deepEqual(latestDueQuarter("2026-11-16"), { reportPeriod: "2026-06-30", dueDate: "2026-08-14" });
+  assert.deepEqual(latestDueQuarter("2026-11-17"), { reportPeriod: "2026-09-30", dueDate: "2026-11-16" });
+  assert.deepEqual(latestDueQuarter("2027-02-16"), { reportPeriod: "2026-09-30", dueDate: "2026-11-16" });
+  assert.deepEqual(latestDueQuarter("2027-02-17"), { reportPeriod: "2026-12-31", dueDate: "2027-02-16" });
 });
 
 test("a holding that ends as a stock's holding starts with the same share count is a likely earlier CUSIP", () => {

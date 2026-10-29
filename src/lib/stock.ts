@@ -45,7 +45,9 @@ export type Change = {
 };
 
 // Exchange MICs and their names.
-export const EXCHANGE_NAMES: Record<string, string> = { XNAS: "Nasdaq", XNYS: "NYSE" };
+export const EXCHANGE_NAMES: Record<string, string> = {
+  XNAS: "Nasdaq", XNYS: "NYSE", XASE: "NYSE American", ARCX: "NYSE Arca", BATS: "Cboe BZX", IEXG: "IEX",
+};
 
 // The quarter-end date before a quarter-end date: "2026-03-31" → "2025-12-31".
 export function previousQuarter(reportPeriod: string): string {
@@ -118,24 +120,37 @@ export function holdingSeries(
   });
 }
 
-// A likely stock split between two quarters held: the share count changed by an exact whole-number
-// ratio (or its inverse, for a reverse split) while the reported value per share moved the other way by
-// about the same factor. Allows the share price itself to move between −50% and +60% in the quarter.
-// Returns new shares per old share, or null. A split in a quarter with other buying or selling is not
-// detected.
-export function likelySplit(previous: QuarterHolding, current: QuarterHolding): number | null {
-  if (previous.state !== "held" || current.state !== "held" || previous.shares <= 0 || current.shares <= 0) return null;
+// New shares per old share when one quarter's share count is a whole multiple (two or more) of the
+// other's: 20, or 0.5 for exactly half. Otherwise null.
+export function exactShareRatio(previous: QuarterHolding | undefined, current: QuarterHolding): number | null {
+  if (previous?.state !== "held" || current.state !== "held" || previous.shares <= 0 || current.shares <= 0) return null;
   const larger = Math.max(previous.shares, current.shares);
   const smaller = Math.min(previous.shares, current.shares);
   if (larger % smaller !== 0 || larger / smaller < 2) return null;
-  const ratio = current.shares > previous.shares ? larger / smaller : smaller / larger;
+  return current.shares > previous.shares ? larger / smaller : smaller / larger;
+}
+
+// A likely stock split between two quarters held: the share count changed by an exact ratio while the
+// reported value per share moved the other way by about the same factor, so the share price itself
+// (value per share times the ratio) moved no more than a market usually does in a quarter. Buying or
+// selling leaves value per share where the market took it instead. Round-number trades can mimic 2- and
+// 3-for-1 splits, so for those the price may move only −30% to +45%; for larger ratios −50% to +60%. A
+// reverse split (fewer shares) is labelled only when another investor's holding changed by the same
+// ratio in the same quarter (confirmingRatios), because selling exactly half of a round position looks
+// the same. Returns new shares per old share, or null. A split in a quarter with other buying or selling
+// is not detected.
+export function likelySplit(previous: QuarterHolding, current: QuarterHolding, confirmingRatios: number[] = []): number | null {
+  const ratio = exactShareRatio(previous, current);
+  if (ratio === null || (ratio < 1 && !confirmingRatios.includes(ratio))) return null;
   const priceMove = (current.valueUsd / current.shares) / (previous.valueUsd / previous.shares) * ratio;
-  return priceMove >= 0.5 && priceMove <= 1.6 ? ratio : null;
+  const [low, high] = Math.max(ratio, 1 / ratio) <= 3 ? [0.7, 1.45] : [0.5, 1.6];
+  return priceMove >= low && priceMove <= high ? ratio : null;
 }
 
 // The change from the previous quarter. It is known only when the investor reported both quarters and
-// its holding is clear in both; a missing report is not a zero.
-export function quarterChange(current: QuarterHolding, previous: QuarterHolding | undefined): Change {
+// its holding is clear in both; a missing report is not a zero. confirmingRatios: other investors' exact
+// share ratios for the same quarter (see likelySplit).
+export function quarterChange(current: QuarterHolding, previous: QuarterHolding | undefined, confirmingRatios: number[] = []): Change {
   const previousPeriod = previousQuarter(current.reportPeriod);
   const notComparable = (reportPeriod: string, reason: "no-report" | "unclear"): Change =>
     ({ kind: "not-comparable", previousPeriod, shares: 0, fraction: null, splitRatio: null, received: null, blocker: { reportPeriod, reason } });
@@ -149,7 +164,7 @@ export function quarterChange(current: QuarterHolding, previous: QuarterHolding 
   }
   const shares = current.shares - previous.shares;
   const fraction = previous.shares > 0 ? shares / previous.shares : null;
-  const splitRatio = likelySplit(previous, current);
+  const splitRatio = likelySplit(previous, current, confirmingRatios);
   const kind: ChangeKind = previous.state === "held"
     ? current.state === "held"
       ? splitRatio !== null ? "split" : shares > 0 ? "increased" : shares < 0 ? "decreased" : "unchanged"

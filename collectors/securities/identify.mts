@@ -1,12 +1,22 @@
-// Checks that a CUSIP and a ticker identify the same listed security, using two independent sources:
-// OpenFIGI (CUSIP → ticker) and SEC's company ticker file (ticker → company and exchange). Each share
-// class has its own CUSIP and ticker, so classes become separate securities.
+// Checks that a CUSIP and a ticker identify the same listed security, using independent sources:
+// OpenFIGI (CUSIP → ticker), SEC's company ticker file (ticker → company) and Nasdaq's directory of
+// US-listed securities (ticker → listing exchange). Each share class has its own CUSIP and ticker, so
+// classes become separate securities.
 
 export const SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json";
 export const OPENFIGI_URL = "https://api.openfigi.com/v3/mapping";
+// Nasdaq's daily symbol directory: one file for Nasdaq listings, one for every other US exchange.
+export const NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt";
+export const OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt";
 
-// Exchange names in SEC's ticker file and their ISO 10383 market identifier codes (MICs).
-export const EXCHANGE_MICS: Record<string, string> = { Nasdaq: "XNAS", NYSE: "XNYS" };
+// Listing exchanges in Nasdaq's directory (Q: Nasdaq's own file), their ISO 10383 market identifier
+// codes (MICs) and names. SEC's ticker file is coarser: it labels NYSE American and NYSE Arca listings
+// "NYSE", so it only has to agree with the directory.
+export const LISTING_MICS: Record<string, string> = { Q: "XNAS", N: "XNYS", A: "XASE", P: "ARCX", Z: "BATS", V: "IEXG" };
+export const LISTING_NAMES: Record<string, string> = {
+  Q: "Nasdaq", N: "NYSE", A: "NYSE American", P: "NYSE Arca", Z: "Cboe BZX", V: "IEX", TXSE: "the Texas Stock Exchange",
+};
+const SEC_EXCHANGE_LISTINGS: Record<string, string[]> = { Nasdaq: ["Q"], NYSE: ["N", "A", "P"], CBOE: ["Z"], TXSE: ["TXSE"] };
 
 // OpenFIGI security types that are stocks. Funds and ETFs (ETP), preferred shares and units are not.
 export const STOCK_TYPES = ["Common Stock", "ADR", "REIT", "MLP", "NY Reg Shrs", "Tracking Stk"];
@@ -52,6 +62,29 @@ export function usListing(result: unknown): FigiListing | null {
   };
 }
 
+export type Listing = { ticker: string; name: string; exchange: string; etf: boolean };
+
+// Every security in Nasdaq's directory files, by ticker in SEC's style ("BRK.B" → "BRK-B"). Test
+// issues are left out.
+export function listingDirectory(nasdaqListed: string, otherListed: string): Map<string, Listing> {
+  const listings = new Map<string, Listing>();
+  const read = (text: string, symbolField: string, exchange: (row: Record<string, string>) => string) => {
+    const [header, ...lines] = text.split(/\r?\n/);
+    const fields = header.split("|");
+    for (const line of lines) {
+      const values = line.split("|");
+      if (line.startsWith("File Creation Time") || values.length !== fields.length) continue;
+      const row = Object.fromEntries(fields.map((field, i) => [field, values[i]]));
+      if (row["Test Issue"] === "Y") continue;
+      const ticker = normalizeTicker(row[symbolField]);
+      listings.set(ticker, { ticker, name: row["Security Name"], exchange: exchange(row), etf: row.ETF === "Y" });
+    }
+  };
+  read(nasdaqListed, "Symbol", () => "Q");
+  read(otherListed, "ACT Symbol", (row) => row.Exchange);
+  return listings;
+}
+
 export type SecListing = { cik: string; name: string; ticker: string; exchange: string };
 
 // A ticker's row in SEC's company ticker file ({ fields: [cik, name, ticker, exchange], data: [...] }).
@@ -74,31 +107,84 @@ export function shareClassOf(figiName: string): string | null {
   return match ? `Class ${match[1]}` : null;
 }
 
-// Words that say what kind of company a name is, not which one.
-const GENERIC_WORDS = new Set([
+// Legal forms, connecting words and share descriptions: they say nothing about which company it is.
+const LEGAL_WORDS = new Set([
   "THE", "OF", "AND", "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COS", "COMPANY", "LTD", "LIMITED",
   "PLC", "LLC", "LP", "NV", "SA", "AG", "SE", "NEW", "DEL", "DE", "CL", "CLASS", "COM", "SHS", "SHARES",
-  "HOLDINGS", "HOLDING", "GROUP", "TRUST", "TR",
 ]);
+// Words that say what kind of company a name is, not which one.
+const GENERIC_WORDS = new Set([...LEGAL_WORDS, "HOLDINGS", "HOLDING", "GROUP", "TRUST", "TR"]);
+// Words many unrelated companies share, such as places and industries: they do not identify a company
+// ("FIRST SOLAR" and "FIRST REPUBLIC", "AMERICAN ELECTRIC POWER" and "GENERAL ELECTRIC").
+const COMMON_WORDS = new Set([
+  "FIRST", "AMERICAN", "AMERICA", "NATIONAL", "GENERAL", "UNITED", "INTERNATIONAL", "GLOBAL", "WORLDWIDE", "US", "USA",
+  "NORTH", "SOUTH", "EAST", "WEST", "NORTHERN", "SOUTHERN", "EASTERN", "WESTERN", "PACIFIC", "ATLANTIC", "CENTRAL",
+  "CONTINENTAL", "STANDARD", "ROYAL", "PUBLIC", "CAPITAL", "FINANCIAL", "BANK", "BANCORP", "BANCSHARES", "CREDIT",
+  "MORTGAGE", "INSURANCE", "INVESTMENT", "INVESTMENTS", "PARTNERS", "MANAGEMENT", "ENERGY", "POWER", "ELECTRIC",
+  "WATER", "GAS", "OIL", "PETROLEUM", "MINING", "GOLD", "STEEL", "MATERIALS", "CHEMICAL", "CHEMICALS", "HEALTH",
+  "HEALTHCARE", "MEDICAL", "PHARMACEUTICALS", "THERAPEUTICS", "SCIENCES", "SCIENTIFIC", "LABORATORIES", "TECHNOLOGY",
+  "TECHNOLOGIES", "SYSTEMS", "SOFTWARE", "NETWORKS", "DEVICES", "DIGITAL", "SEMICONDUCTOR", "ELECTRONICS",
+  "INSTRUMENTS", "DYNAMICS", "AEROSPACE", "AIR", "AIRLINES", "MOTORS", "SPACE", "SERVICE", "SERVICES", "INDUSTRIES",
+  "INDUSTRIAL", "PRODUCTS", "WORKS", "RESOURCES", "PROPERTY", "PROPERTIES", "REALTY", "COMMUNICATIONS", "MEDIA",
+  "ENTERTAINMENT", "INTERACTIVE", "BRANDS", "STORES", "FOODS", "DOLLAR", "ENTERPRISE", "ENTERPRISES", "SOLUTIONS",
+  "COMPANIES",
+]);
+// Abbreviations 13F filers and OpenFIGI use, written out.
+const ABBREVIATIONS: Record<string, string> = {
+  HLDGS: "HOLDINGS", HLDG: "HOLDING", BK: "BANK", FINL: "FINANCIAL", INTL: "INTERNATIONAL", NATL: "NATIONAL",
+  AMER: "AMERICA", AMERN: "AMERICAN", CMNTYS: "COMMUNITIES", INDS: "INDUSTRIES", INDL: "INDUSTRIAL", SVCS: "SERVICES",
+  SVC: "SERVICE", SYS: "SYSTEMS", MGMT: "MANAGEMENT", PETE: "PETROLEUM", LABS: "LABORATORIES", PPTYS: "PROPERTIES",
+  PPTY: "PROPERTY", RLTY: "REALTY", GRP: "GROUP", ENTMT: "ENTERTAINMENT", ELEC: "ELECTRIC", PWR: "POWER", WTR: "WATER",
+  WKS: "WORKS", CTZNS: "CITIZENS", MTRS: "MOTORS", AIRLS: "AIRLINES", TR: "TRUST", PRODS: "PRODUCTS", CHEMS: "CHEMICALS",
+  CHEM: "CHEMICAL", MFG: "MANUFACTURING", MATLS: "MATERIALS", HLTH: "HEALTH", MED: "MEDICAL", UTD: "UNITED",
+  COMMUNICATNS: "COMMUNICATIONS", SCIENCE: "SCIENCES", TECHNOLOGIE: "TECHNOLOGIES", INVT: "INVESTMENT", GP: "GROUP",
+  GEN: "GENERAL", NY: "NEW YORK",
+};
 
-function nameWords(name: string): Set<string> {
-  const words = name.toUpperCase().replace(/['’]/g, "").split(/[^A-Z0-9]+/);
-  return new Set(words.filter((word) => word.length > 1 && !GENERIC_WORDS.has(word)));
+// A name's words, upper case and written out ("M & T BK CORP" → M, T, BANK, CORP).
+function nameWords(name: string): string[] {
+  return name.toUpperCase().replace(/['’]/g, "").split(/[^A-Z0-9]+/).filter(Boolean).flatMap((word) => (ABBREVIATIONS[word] ?? word).split(" "));
 }
 
-// Whether two sources' names for a company share a distinctive word ("MOODY'S CORP" and
-// "MOODYS CORP /DE/"). Names are abbreviated differently, so this only catches clear mismatches, such as
-// a ticker that now belongs to another company.
+// Whether two sources' names are for the same company. Names are spelled, abbreviated, ordered and cut
+// short differently, so either of these counts:
+// - the same letters once legal forms, spaces, punctuation and a cut-off last letter are ignored
+//   ("P G & E CORP" and "PG&E Corp", "PULTE GROUP INC" and "PULTEGROUP INC", "M & T BK CORP" and
+//   "M&T BANK CORP", "AIR PRODUCTS AND CHEMICALS I" and "Air Products & Chemicals, Inc.");
+// - one name's first distinctive word, skipping words many companies share, appears in the other name
+//   ("MOODY'S CORP" and "MOODYS CORP /DE/", "DR HORTON INC" and "HORTON D R INC", "DISNEY WALT CO" and
+//   "Walt Disney Co").
+// Different companies with the same family or place name still match ("JOHNSON & JOHNSON" and "Johnson
+// Controls", "FIRST CITIZENS BANCSHARES" and "CITIZENS FINANCIAL"), so this only backs up the other
+// checks. A trading name that shares nothing with the legal name ("WABTEC" and "Westinghouse Air Brake
+// Technologies", "GE AEROSPACE" and "GENERAL ELECTRIC CO") does not match; such a stock is checked by a
+// person and added with --cusip and --ticker.
 export function sameCompany(a: string, b: string): boolean {
-  const words = nameWords(b);
-  return [...nameWords(a)].some((word) => words.has(word));
+  const [wordsA, wordsB] = [nameWords(a), nameWords(b)];
+  // Each name's letters, with and without a last single letter (a name cut short, or a class letter).
+  const compact = (words: string[]) => {
+    const kept = words.filter((word) => !LEGAL_WORDS.has(word));
+    return [kept.join(""), ...(kept.at(-1)?.length === 1 ? [kept.slice(0, -1).join("")] : [])].filter((letters) => letters.length >= 3);
+  };
+  const lettersB = compact(wordsB);
+  if (compact(wordsA).some((letters) => lettersB.includes(letters))) return true;
+  const key = (words: string[]) => words.find((word) => word.length > 1 && !GENERIC_WORDS.has(word) && !COMMON_WORDS.has(word));
+  const [keyA, keyB] = [key(wordsA), key(wordsB)];
+  return (keyA !== undefined && wordsB.includes(keyA)) || (keyB !== undefined && wordsA.includes(keyB));
 }
 
 // Where our filings report the CUSIP: the earliest quarter (with a filing as evidence) and the
 // names filers used for it.
 export type FilingEvidence = { firstPeriod: string; firstSourceUrl: string; latestPeriod: string; reportedNames: string[] };
 
-export type Evidence = { cusip: string; ticker: string; figi: FigiListing | null; sec: SecListing | null; filings: FilingEvidence | null };
+export type Evidence = {
+  cusip: string;
+  ticker: string;
+  figi: FigiListing | null;
+  sec: SecListing | null;
+  listing: Listing | null; // The ticker in Nasdaq's directory of US-listed securities.
+  filings: FilingEvidence | null;
+};
 
 export type PlannedIdentifier = {
   identifier_type: string;
@@ -118,7 +204,7 @@ export type PlannedSecurity = {
 // earliest quarter our filings report it (evidenced by that filing); the ticker from the day SEC's
 // file was read. Validity is never extended past what the evidence shows.
 export function planSecurity(evidence: Evidence, today: string, shareClass: string | null): { plan: PlannedSecurity | null; problems: string[] } {
-  const { cusip, ticker, figi, sec, filings } = evidence;
+  const { cusip, ticker, figi, sec, listing, filings } = evidence;
   const problems: string[] = [];
   if (!isValidCusip(cusip)) problems.push(`${cusip} is not a valid CUSIP (check digit)`);
   if (!figi) problems.push(`OpenFIGI has no US listing for CUSIP ${cusip}`);
@@ -127,9 +213,17 @@ export function planSecurity(evidence: Evidence, today: string, shareClass: stri
     if (!STOCK_TYPES.includes(figi.securityType)) problems.push(`OpenFIGI lists ${cusip} as ${figi.securityType}, not a stock`);
   }
   if (!sec) problems.push(`${ticker} is not in SEC's company ticker file`);
-  else if (!EXCHANGE_MICS[sec.exchange]) problems.push(`${ticker} trades on ${sec.exchange}; only ${Object.keys(EXCHANGE_MICS).join(" and ")} are supported`);
+  if (!listing) problems.push(`${ticker} is not in Nasdaq's directory of US-listed securities`);
+  else {
+    const exchange = LISTING_NAMES[listing.exchange] ?? `exchange ${listing.exchange}`;
+    if (!LISTING_MICS[listing.exchange]) problems.push(`${ticker} is listed on ${exchange}, which is not supported yet`);
+    if (listing.etf) problems.push(`Nasdaq's directory lists ${ticker} as an ETF, not a stock`);
+    if (sec && !(SEC_EXCHANGE_LISTINGS[sec.exchange] ?? []).includes(listing.exchange)) {
+      problems.push(`SEC lists ${ticker} on ${sec.exchange}, but Nasdaq's directory lists it on ${exchange}`);
+    }
+  }
   if (!filings) problems.push(`No tracked filing reports CUSIP ${cusip}`);
-  if (problems.length > 0 || !figi || !sec || !filings) return { plan: null, problems };
+  if (problems.length > 0 || !figi || !sec || !listing || !filings) return { plan: null, problems };
   return {
     problems,
     plan: {
@@ -140,7 +234,13 @@ export function planSecurity(evidence: Evidence, today: string, shareClass: stri
       },
       identifiers: [
         { identifier_type: "cusip", identifier_value: cusip, namespace: "", valid_from: filings.firstPeriod, source_reference: filings.firstSourceUrl },
-        { identifier_type: "ticker", identifier_value: ticker, namespace: EXCHANGE_MICS[sec.exchange], valid_from: today, source_reference: SEC_TICKERS_URL },
+        {
+          identifier_type: "ticker",
+          identifier_value: ticker,
+          namespace: LISTING_MICS[listing.exchange],
+          valid_from: today,
+          source_reference: listing.exchange === "Q" ? NASDAQ_LISTED_URL : OTHER_LISTED_URL,
+        },
       ],
     },
   };
@@ -217,15 +317,19 @@ export function planEarlierStart(
 }
 
 // One investor's shares under the old CUSIP in the last quarter it was reported, and of the stock in the
-// next quarter.
-export type Continuity = { investor: string; before: number; after: number };
+// next quarter, and how its reported value per share changed between them (null without a value).
+export type Continuity = { investor: string; before: number; after: number; priceRatio: number | null };
 
 // An earlier CUSIP of a stock, replaced in a corporate action that converted it one-for-one (Liberty
 // Media's Liberty Live tracking stock into Liberty Live Holdings on 15 December 2025): recorded as a CUSIP
 // of the stock from the earliest quarter our filings report it until the conversion date. It must be a
-// real security that is no longer listed, the conversion must have an official source, and at least
-// one investor's share count must carry over unchanged, which shows the conversion was one-for-one.
-// Conversions at other ratios are not linked: their share counts are not comparable.
+// real security that is no longer listed, and the conversion must have an official source. The data
+// must show the conversion was one-for-one: at least one investor's share count carried over unchanged.
+// Investors that trade often (BlackRock) rarely keep a count unchanged; when the official record states
+// one-for-one (statedOneForOne), it is enough that every investor's value per share stayed within −30%
+// to +45% across the conversion, as a share price does in a quarter, which rules out conversions such as
+// 0.1 new share per old share. Conversions at other ratios are not linked: their share counts are not
+// comparable.
 export function planPredecessor(input: {
   cusip: string;
   stockName: string;
@@ -236,8 +340,9 @@ export function planPredecessor(input: {
   until: string; // The conversion date; the old CUSIP identifies the stock before it.
   source: string; // An official record of the conversion.
   continuity: Continuity[];
+  statedOneForOne?: boolean; // The person confirms the official record states a one-for-one conversion.
 }): { identifier: PlannedIdentifier | null; problems: string[] } {
-  const { cusip, stockName, stockCusips, listed, known, filings, until, source, continuity } = input;
+  const { cusip, stockName, stockCusips, listed, known, filings, until, source, continuity, statedOneForOne = false } = input;
   const problems: string[] = [];
   if (!isValidCusip(cusip)) problems.push(`${cusip} is not a valid CUSIP`);
   const record = (known as { data?: { name?: string }[] } | null)?.data ?? [];
@@ -254,9 +359,17 @@ export function planPredecessor(input: {
     const overlapping = stockCusips.filter((window) => window.validFrom < until && (window.validTo === null || window.validTo > filings.firstPeriod));
     for (const window of overlapping) problems.push(`The stock's CUSIP ${window.cusip} already applies from ${window.validFrom}, before ${until}`);
   }
+  const priced = (row: Continuity) => row.priceRatio !== null && row.priceRatio >= 0.7 && row.priceRatio <= 1.45;
   if (continuity.length === 0) problems.push("No investor reported both the old CUSIP's last quarter and the next quarter, so the conversion cannot be checked");
   else if (!continuity.some((row) => row.before === row.after)) {
-    problems.push(`No investor's share count carried over unchanged (${continuity.map((row) => `${row.investor}: ${row.before} → ${row.after}`).join(", ")}); the conversion may not be one-for-one`);
+    const counts = continuity.map((row) => `${row.investor}: ${row.before} → ${row.after}`).join(", ");
+    if (!statedOneForOne) {
+      problems.push(`No investor's share count carried over unchanged (${counts}); the conversion may not be one-for-one. `
+        + "If the official record states one-for-one, add --stated-one-for-one to check value per share instead");
+    } else if (!continuity.every(priced)) {
+      problems.push(`Value per share changed by ${continuity.map((row) => `×${row.priceRatio?.toFixed(2) ?? "?"} (${row.investor})`).join(", ")} `
+        + "across the conversion, outside what a one-for-one conversion allows (×0.70 to ×1.45)");
+    }
   }
   if (problems.length > 0 || !filings) return { identifier: null, problems };
   return {

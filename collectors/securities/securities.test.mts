@@ -4,8 +4,8 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
 import {
-  dayAfter, isValidCusip, markTickerConflicts, normalizeTicker, openFigiJob, planAlias, planConversion, planEarlierStart, planPredecessor,
-  planSecurity, sameCompany, secListing, shareClassOf, usListing,
+  dayAfter, isValidCusip, listingDirectory, markTickerConflicts, NASDAQ_LISTED_URL, normalizeTicker, openFigiJob, OTHER_LISTED_URL, planAlias,
+  planConversion, planEarlierStart, planPredecessor, planSecurity, sameCompany, secListing, shareClassOf, usListing,
   type Candidate, type Evidence,
 } from "./identify.mts";
 
@@ -19,9 +19,31 @@ const secFile = {
     [1067983, "BERKSHIRE HATHAWAY INC", "BRK-B", "NYSE"],
     [1059556, "MOODYS CORP /DE/", "MCO", "NYSE"],
     [920760, "LENNAR CORP /NEW/", "LEN", "NYSE"],
+    [49938, "IMPERIAL OIL LTD", "IMO", "NYSE"],
+    [1374310, "Cboe Global Markets, Inc.", "CBOE", "CBOE"],
+    [884394, "SPDR S&P 500 ETF TRUST", "SPY", "NYSE"],
+    [2, "Example Texas Co", "TXCO", "TXSE"],
     [1, "Example OTC Co", "XMPL", "OTC"],
   ],
 };
+// Nasdaq's directory files, in their format: pipe-separated, Windows line endings, a closing timestamp.
+const directory = listingDirectory(
+  ["Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
+    "AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N",
+    "GOOGL|Alphabet Inc. - Class A Common Stock|Q|N|N|100|N|N",
+    "GOOG|Alphabet Inc. - Class C Capital Stock|Q|N|N|100|N|N",
+    "ZXZZT|NASDAQ TEST STOCK|G|Y|N|100|N|N",
+    "File Creation Time: 1029202610:01|||||||"].join("\r\n"),
+  ["ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol",
+    "BRK.B|Berkshire Hathaway Inc. New Common Stock|N|BRK.B|N|100|N|BRK.B",
+    "MCO|Moody's Corporation Common Stock|N|MCO|N|100|N|MCO",
+    "LEN|Lennar Corporation Class A Common Stock|N|LEN|N|100|N|LEN",
+    "IMO|Imperial Oil Limited Common Stock|A|IMO|N|100|N|IMO",
+    "CBOE|Cboe Global Markets, Inc. Common Stock|Z|CBOE|N|100|N|CBOE",
+    "SPY|State Street SPDR S&P 500 ETF Trust|P|SPY|Y|100|N|SPY",
+    "TXCO|Example Texas Co Common Stock|TXSE|TXCO|N|100|N|TXCO",
+    "File Creation Time: 1029202610:01||||||"].join("\r\n"),
+);
 // OpenFIGI's result for one CUSIP.
 const figi = (ticker: string, name: string, securityType = "Common Stock") => ({
   data: [
@@ -36,7 +58,7 @@ const filings = {
   reportedNames: ["APPLE INC COM"],
 };
 const evidence = (cusip: string, ticker: string, figiTicker = ticker, name = "APPLE INC", securityType?: string): Evidence => ({
-  cusip, ticker, figi: usListing(figi(figiTicker, name, securityType)), sec: secListing(secFile, ticker), filings,
+  cusip, ticker, figi: usListing(figi(figiTicker, name, securityType)), sec: secListing(secFile, ticker), listing: directory.get(ticker) ?? null, filings,
 });
 
 test("CUSIP check digits and ticker spellings are validated", () => {
@@ -50,19 +72,44 @@ test("CUSIP check digits and ticker spellings are validated", () => {
   ]);
 });
 
-test("a CUSIP and ticker are added only when OpenFIGI, SEC and our filings agree", () => {
+test("Nasdaq's directory gives each listing's exchange; test issues are left out", () => {
+  assert.deepEqual(directory.get("BRK-B"), { ticker: "BRK-B", name: "Berkshire Hathaway Inc. New Common Stock", exchange: "N", etf: false });
+  assert.deepEqual([directory.get("AAPL")?.exchange, directory.get("IMO")?.exchange, directory.get("SPY")?.etf], ["Q", "A", true]);
+  assert.equal(directory.get("ZXZZT"), undefined);
+  assert.equal(directory.size, 10);
+});
+
+test("a CUSIP and ticker are added only when OpenFIGI, SEC, Nasdaq's directory and our filings agree", () => {
   const { plan, problems } = planSecurity(evidence("037833100", "AAPL"), "2026-10-29", null);
   assert.deepEqual(problems, []);
   assert.deepEqual(plan, {
     security: { issuer_name: "Apple Inc.", share_class: null, security_type: "common_stock" },
     identifiers: [
       { identifier_type: "cusip", identifier_value: "037833100", namespace: "", valid_from: "2021-09-30", source_reference: filings.firstSourceUrl },
-      { identifier_type: "ticker", identifier_value: "AAPL", namespace: "XNAS", valid_from: "2026-10-29", source_reference: "https://www.sec.gov/files/company_tickers_exchange.json" },
+      { identifier_type: "ticker", identifier_value: "AAPL", namespace: "XNAS", valid_from: "2026-10-29", source_reference: NASDAQ_LISTED_URL },
     ],
   });
   assert.deepEqual(planSecurity(evidence("037833100", "AAPL", "MSFT"), "2026-10-29", null).problems, ["OpenFIGI maps CUSIP 037833100 to MSFT, not AAPL"]);
   assert.deepEqual(planSecurity(evidence("037833101", "AAPL"), "2026-10-29", null).problems, ["037833101 is not a valid CUSIP (check digit)"]);
-  assert.deepEqual(planSecurity(evidence("037833100", "XMPL", "XMPL", "EXAMPLE OTC CO"), "2026-10-29", null).problems, ["XMPL trades on OTC; only Nasdaq and NYSE are supported"]);
+  assert.deepEqual(planSecurity(evidence("037833100", "XMPL", "XMPL", "EXAMPLE OTC CO"), "2026-10-29", null).problems, [
+    "XMPL is not in Nasdaq's directory of US-listed securities",
+  ]);
+  // The listing exchange comes from Nasdaq's directory: SEC labels NYSE American and NYSE Arca "NYSE".
+  const ticker = (cusip: string, symbol: string, name: string) => planSecurity(evidence(cusip, symbol, symbol, name), "2026-10-29", null).plan?.identifiers[1];
+  assert.deepEqual(ticker("453038408", "IMO", "IMPERIAL OIL LTD"), {
+    identifier_type: "ticker", identifier_value: "IMO", namespace: "XASE", valid_from: "2026-10-29", source_reference: OTHER_LISTED_URL,
+  });
+  assert.equal(ticker("12503M108", "CBOE", "CBOE GLOBAL MARKETS INC")?.namespace, "BATS");
+  assert.deepEqual(planSecurity(evidence("78462F103", "SPY", "SPY", "SPDR S&P 500 ETF TRUST"), "2026-10-29", null).problems, [
+    "Nasdaq's directory lists SPY as an ETF, not a stock",
+  ]);
+  assert.deepEqual(planSecurity(evidence("000000000", "TXCO", "TXCO", "EXAMPLE TEXAS CO"), "2026-10-29", null).problems, [
+    "TXCO is listed on the Texas Stock Exchange, which is not supported yet",
+  ]);
+  // SEC and Nasdaq's directory must agree on the exchange.
+  assert.deepEqual(planSecurity({ ...evidence("037833100", "AAPL"), listing: { ticker: "AAPL", name: "Apple", exchange: "N", etf: false } }, "2026-10-29", null).problems, [
+    "SEC lists AAPL on Nasdaq, but Nasdaq's directory lists it on NYSE",
+  ]);
   assert.deepEqual(planSecurity({ ...evidence("037833100", "AAPL"), filings: null }, "2026-10-29", null).problems, ["No tracked filing reports CUSIP 037833100"]);
   // Only stocks: an ETF (ETP in OpenFIGI) is not added.
   assert.deepEqual(planSecurity(evidence("037833100", "AAPL", "AAPL", "APPLE INC", "ETP"), "2026-10-29", null).problems, ["OpenFIGI lists 037833100 as ETP, not a stock"]);
@@ -73,6 +120,29 @@ test("a CUSIP and ticker are added only when OpenFIGI, SEC and our filings agree
 
 test("company names and share classes are read from both sources' spellings", () => {
   assert.ok(sameCompany("MOODY'S CORP", "MOODYS CORP /DE/"));
+  // Spacing, punctuation and abbreviations (all refused by the earlier matcher, from real names).
+  assert.ok(sameCompany("P G & E CORP", "PG&E Corp"));
+  assert.ok(sameCompany("PULTE GROUP INC", "PULTEGROUP INC"));
+  assert.ok(sameCompany("M & T BK CORP", "M&T BANK CORP"));
+  assert.ok(sameCompany("SIRIUSXM HOLDINGS INC", "SIRIUS XM HOLDINGS INC."));
+  assert.ok(sameCompany("BANK AMER CORP", "BANK OF AMERICA CORP /DE/"));
+  assert.ok(sameCompany("AMERICAN ELEC PWR CO INC", "AMERICAN ELECTRIC POWER CO INC"));
+  assert.ok(sameCompany("NORTHERN TR CORP", "NORTHERN TRUST CORP"));
+  assert.ok(sameCompany("FIRST CTZNS BANCSHARES INC D", "FIRST CITIZENS BANCSHARES INC"));
+  // Word order and names cut short.
+  assert.ok(sameCompany("DR HORTON INC", "HORTON D R INC /DE/"));
+  assert.ok(sameCompany("T ROWE PRICE GROUP INC", "PRICE T ROWE GROUP INC"));
+  assert.ok(sameCompany("DISNEY WALT CO", "Walt Disney Co"));
+  assert.ok(sameCompany("BANK OF NY MELLON CORP", "Bank of New York Mellon Corp"));
+  assert.ok(sameCompany("AIR PRODUCTS AND CHEMICALS I", "Air Products & Chemicals, Inc."));
+  assert.ok(sameCompany("PUBLIC SERVICE ENTERPRISE GP", "PUBLIC SERVICE ENTERPRISE GROUP INC"));
+  // A shared common word alone is not enough; a brand unrelated to the legal name is left for a person.
+  assert.ok(!sameCompany("FIRST SOLAR INC", "FIRST REPUBLIC BANK"));
+  assert.ok(!sameCompany("AMERICAN EXPRESS CO", "AMERICAN AIRLINES GROUP INC"));
+  assert.ok(!sameCompany("AMERICAN ELECTRIC POWER CO INC", "GENERAL ELECTRIC CO"));
+  assert.ok(!sameCompany("AT&T INC.", "AGILENT TECHNOLOGIES, INC."));
+  assert.ok(!sameCompany("WABTEC CORP", "WESTINGHOUSE AIR BRAKE TECHNOLOGIES CORP"));
+  assert.ok(!sameCompany("GE AEROSPACE", "GENERAL ELECTRIC CO"));
   assert.ok(sameCompany("D R HORTON INC", "HORTON D R INC /DE/"));
   assert.ok(sameCompany("COCA-COLA CO/THE", "COCA COLA CO"));
   assert.ok(!sameCompany("ACTIVISION BLIZZARD INC", "Apple Inc."));
@@ -201,15 +271,22 @@ test("an earlier CUSIP is linked only when it was converted one-for-one, with an
     },
     until: "2025-12-15",
     source,
-    continuity: [{ investor: "berkshire-hathaway", before: 4_986_588, after: 4_986_588 }],
+    continuity: [{ investor: "berkshire-hathaway", before: 4_986_588, after: 4_986_588, priceRatio: 0.86 }],
   };
   assert.deepEqual(planPredecessor(input), {
     problems: [],
     identifier: { identifier_type: "cusip", identifier_value: "531229748", namespace: "", valid_from: "2023-09-30", valid_to: "2025-12-15", source_reference: source },
   });
   // Sirius XM's 2024 conversion was not one-for-one (0.8375 and 0.1 new shares), so it is not linked.
-  assert.match(planPredecessor({ ...input, continuity: [{ investor: "berkshire-hathaway", before: 132_878_213, after: 105_155_029 }] }).problems[0],
-    /No investor's share count carried over unchanged/);
+  // Sirius XM's old shares became 0.1 new shares, and value per share rose about eightfold: never linked.
+  const sirius = [{ investor: "berkshire-hathaway", before: 132_878_213, after: 105_155_029, priceRatio: 8.3 }];
+  assert.match(planPredecessor({ ...input, continuity: sirius }).problems[0], /No investor's share count carried over unchanged/);
+  assert.match(planPredecessor({ ...input, continuity: sirius, statedOneForOne: true }).problems[0], /outside what a one-for-one conversion allows/);
+  // A one-for-one conversion (ExxonMobil Holdings, 1 July 2026) held by an investor that also traded:
+  // linked only when the official record states one-for-one and value per share stayed in range.
+  const traded = [{ investor: "blackrock", before: 335_000_000, after: 337_400_000, priceRatio: 1.06 }];
+  assert.match(planPredecessor({ ...input, continuity: traded }).problems[0], /--stated-one-for-one/);
+  assert.deepEqual(planPredecessor({ ...input, continuity: traded, statedOneForOne: true }).problems, []);
   assert.deepEqual(planPredecessor({ ...input, listed: { ticker: "LLYVA", name: "", securityType: "", marketSector: "", compositeFigi: "" } }).problems, [
     "531229748 is still listed (LLYVA); only a CUSIP that is no longer listed can be a predecessor",
   ]);

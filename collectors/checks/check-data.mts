@@ -6,8 +6,8 @@
 import { parseArgs } from "node:util";
 import { createClient } from "@supabase/supabase-js";
 import { lastQuarterBefore, nextQuarter, previousQuarter } from "../../src/lib/stock.ts";
-import { EXCHANGE_MICS, isValidCusip, sameCompany, secListing, usListing } from "../securities/identify.mts";
-import { loadAll, openFigi, requireEnv, secTickers, today } from "../securities/sources.mts";
+import { isValidCusip, LISTING_MICS, LISTING_NAMES, sameCompany, secListing, usListing } from "../securities/identify.mts";
+import { listings, loadAll, openFigi, requireEnv, secTickers, today } from "../securities/sources.mts";
 import {
   consecutivePairs, latestDueQuarter, likelyPredecessors, outsideWindows, priceDisagreements, priceJumps, stockOf, suspectedTypos,
   type CusipRecord, type Position,
@@ -168,14 +168,14 @@ async function main() {
     ? confidential.map((row) => `${slug(row.investor_id)} ${quarter(row.report_period)}`).join(", ") : "none"}`);
 
   if (values.identities) {
-    section("Stock identities (OpenFIGI and SEC, now)");
+    section("Stock identities (OpenFIGI, SEC and Nasdaq's directory of US listings, now)");
     const stocks = securities.flatMap((security) => {
       const ticker = currentTicker(security.id);
       const cusip = cusips.find((record) => record.securityId === security.id && record.validTo === null);
       return ticker && cusip ? [{ security, ticker, cusip: cusip.cusip }] : [];
     });
     console.log(`  Checking ${stocks.length} stocks (about ${Math.ceil(stocks.length / 10 * 2.5 / 60)} min)…`);
-    const [figiResults, secFile] = await Promise.all([openFigi(stocks.map((stock) => stock.cusip)), secTickers()]);
+    const [figiResults, secFile, directory] = await Promise.all([openFigi(stocks.map((stock) => stock.cusip)), secTickers(), listings()]);
     const changes: string[] = [];
     stocks.forEach(({ security, ticker, cusip }, i) => {
       const figi = usListing(figiResults[i]);
@@ -184,8 +184,12 @@ async function main() {
       if (!figi) changes.push(`${label}: CUSIP no longer listed (delisted, acquired or a new CUSIP)`);
       else if (figi.ticker !== ticker.identifier_value) changes.push(`${label}: OpenFIGI now maps the CUSIP to ${figi.ticker}`);
       if (!sec) changes.push(`${label}: ticker no longer in SEC's company ticker file`);
-      else if (EXCHANGE_MICS[sec.exchange] !== ticker.namespace) changes.push(`${label}: SEC now lists it on ${sec.exchange}`);
       else if (!sameCompany(sec.name, security.issuer_name)) changes.push(`${label}: SEC now lists the ticker as "${sec.name}"`);
+      const listing = directory.get(ticker.identifier_value);
+      if (!listing) changes.push(`${label}: no longer in Nasdaq's directory of US-listed securities`);
+      else if (LISTING_MICS[listing.exchange] !== ticker.namespace) {
+        changes.push(`${label}: now listed on ${LISTING_NAMES[listing.exchange] ?? listing.exchange}, recorded as ${ticker.namespace}`);
+      } else if (listing.etf) changes.push(`${label}: Nasdaq's directory now lists it as an ETF`);
     });
     review += changes.length;
     console.log(`  Changed since added (${changes.length}):`);

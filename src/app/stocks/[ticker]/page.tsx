@@ -9,7 +9,8 @@ import {
   quarterParts,
 } from "@/lib/portfolio";
 import {
-  EXCHANGE_NAMES, holdingSeries, lastQuarterBefore, previousQuarter, quarterChange, receivedInQuarter, type Change, type QuarterHolding,
+  EXCHANGE_NAMES, exactShareRatio, holdingSeries, lastQuarterBefore, previousQuarter, quarterChange, receivedInQuarter, type Change,
+  type QuarterHolding,
   type Received, type Unconfirmed,
 } from "@/lib/stock";
 import { getStock, getStockOwnership, type StockPosition } from "@/lib/stock-data";
@@ -147,6 +148,18 @@ export default async function StockPage({ params, searchParams }: StockPageProps
     return [investor.id, holdingSeries(quarters, reported, shares, unclear, received)];
   }));
 
+  // An investor's change in the quarter at this position, with other investors' exact share ratios for
+  // the same quarter, which confirm a reverse split.
+  const changeAt = (investorId: string, position: number) => {
+    const holdings = series.get(investorId) ?? [];
+    const confirmingRatios = investors.filter((other) => other.id !== investorId).flatMap((other) => {
+      const theirs = series.get(other.id) ?? [];
+      const ratio = position > 0 ? exactShareRatio(theirs[position - 1], theirs[position]) : null;
+      return ratio === null ? [] : [ratio];
+    });
+    return quarterChange(holdings[position], holdings[position - 1], confirmingRatios);
+  };
+
   const rows = investors.map((investor) => {
     const holdings = series.get(investor.id) ?? [];
     const current = holdings[index];
@@ -154,7 +167,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
     return {
       investor,
       current,
-      change: quarterChange(current, holdings[index - 1]),
+      change: changeAt(investor.id, index),
       portfolioShare: portfolio && portfolio.valueUsd > 0 ? current.valueUsd / portfolio.valueUsd : 0,
       options: positions.filter((position) => position.investorId === investor.id && position.reportPeriod === selected && position.positionType !== "long"),
     };
@@ -177,7 +190,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   const chartQuarters: ChartQuarter[] = chartSeries.map((holding, position) => {
     const quarter = quarterLabel(holding.reportPeriod);
     const held = holding.state === "held";
-    const { splitRatio } = quarterChange(holding, chartSeries[position - 1]);
+    const { splitRatio } = chartInvestor ? changeAt(chartInvestor.id, position) : quarterChange(holding, chartSeries[position - 1]);
     const descriptions: Record<QuarterHolding["state"], string> = {
       held: `${formatNumber(holding.shares)} shares reported`,
       "not-held": "reported, not held",
@@ -400,7 +413,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                         </tr>
                       </thead>
                       <tbody>
-                        {chartSeries.map((holding, position) => ({ holding, change: quarterChange(holding, chartSeries[position - 1]) }))
+                        {chartSeries.map((holding, position) => ({ holding, change: changeAt(chartInvestor.id, position) }))
                           .toReversed()
                           .map(({ holding, change }) => {
                             const described = describeChange(change);
@@ -455,8 +468,9 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                 </li>
                 <li>
                   &ldquo;Likely stock split&rdquo; marks a change by an exact whole-number ratio, such as 20 times the shares,
-                  while the reported value per share fell by about as much. Shares are shown as reported, not adjusted
-                  for splits.
+                  while the reported value per share fell by about as much. A reverse split (fewer shares) is marked only
+                  when another tracked investor&apos;s holding changed by the same ratio, since selling exactly half looks
+                  the same. Shares are shown as reported, not adjusted for splits.
                 </li>
                 <li>
                   Holdings are matched to {stock.ticker} by CUSIP, including, for the quarters shown above, an earlier CUSIP
