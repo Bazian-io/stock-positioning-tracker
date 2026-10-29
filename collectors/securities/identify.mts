@@ -271,3 +271,45 @@ export function planPredecessor(input: {
     },
   };
 }
+
+export type PlannedConversion = {
+  from_cusip: string;
+  shares_per_share: string; // Exact, as the official record states it.
+  effective_date: string;
+  description: string;
+  source_reference: string;
+};
+
+// A corporate action in which holders of another security received shares of the stock at a fixed
+// ratio (Sirius XM's 9 September 2024 merger: 0.1 new share per Sirius XM share), recorded with its
+// official source. The converted security must be real and reported by our filings in the quarter
+// before the conversion, and the stock must be identified in the quarter of the conversion, so stock
+// pages can show the shares received. heldBefore: investors' shares of the converted security then.
+export function planConversion(input: {
+  fromCusip: string;
+  ratio: string;
+  effectiveDate: string;
+  description: string;
+  source: string;
+  known: unknown; // OpenFIGI's result for the converted security, including delisted securities.
+  heldBefore: { investor: string; shares: number }[];
+  stockIdentified: boolean; // The stock has a CUSIP for the quarter that includes the conversion.
+  fromIsStock: boolean; // The converted CUSIP already identifies the stock then.
+}): { conversion: PlannedConversion | null; problems: string[] } {
+  const { fromCusip, ratio, effectiveDate, description, source, known, heldBefore, stockIdentified, fromIsStock } = input;
+  const problems: string[] = [];
+  if (!isValidCusip(fromCusip)) problems.push(`${fromCusip} is not a valid CUSIP`);
+  if (((known as { data?: unknown[] } | null)?.data ?? []).length === 0) problems.push(`OpenFIGI does not know ${fromCusip} as a security`);
+  if (!/^\d+(\.\d+)?$/.test(ratio) || !(Number(ratio) > 0)) problems.push(`${ratio} is not a positive number of shares per share`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) || Number.isNaN(Date.parse(effectiveDate))) problems.push(`${effectiveDate} is not a date (YYYY-MM-DD)`);
+  if (description.trim() === "") problems.push("The description is empty");
+  if (!/^https:\/\/\S+$/.test(source)) problems.push("The source must be the https address of an official record, such as the company's release or SEC filing");
+  if (heldBefore.length === 0) problems.push(`No tracked filing reports ${fromCusip} for the quarter before ${effectiveDate}, so no holding would change`);
+  if (!stockIdentified) problems.push(`The stock has no CUSIP for the quarter that includes ${effectiveDate}, so received shares would not be matched`);
+  if (fromIsStock) problems.push(`${fromCusip} already identifies the stock at that time`);
+  if (problems.length > 0) return { conversion: null, problems };
+  return {
+    problems,
+    conversion: { from_cusip: fromCusip, shares_per_share: ratio, effective_date: effectiveDate, description: description.trim(), source_reference: source },
+  };
+}

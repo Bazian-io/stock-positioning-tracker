@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
 import {
-  dayAfter, isValidCusip, markTickerConflicts, normalizeTicker, openFigiJob, planAlias, planEarlierStart, planPredecessor, planSecurity, sameCompany, secListing, shareClassOf, usListing,
+  dayAfter, isValidCusip, markTickerConflicts, normalizeTicker, openFigiJob, planAlias, planConversion, planEarlierStart, planPredecessor,
+  planSecurity, sameCompany, secListing, shareClassOf, usListing,
   type Candidate, type Evidence,
 } from "./identify.mts";
 
@@ -222,4 +223,32 @@ test("an earlier CUSIP is linked only when it was converted one-for-one, with an
   ]);
   assert.match(planPredecessor({ ...input, stockName: "Apple Inc." }).problems[0], /does not match Apple Inc\./);
   assert.match(planPredecessor({ ...input, continuity: [] }).problems[0], /cannot be checked/);
+});
+
+test("a conversion ratio is recorded only for a real security our filings held, with an official source", () => {
+  // Sirius XM's 9 September 2024 merger: 0.1 new SIRI share for each Sirius XM share.
+  const source = "https://www.libertymedia.com/news/detail/542/liberty-media-and-sirius-xm-announce-final-exchange-ratio";
+  const input = {
+    fromCusip: "82968B103",
+    ratio: "0.1",
+    effectiveDate: "2024-09-09",
+    description: "Sirius XM's merger with Liberty Sirius XM Holdings",
+    source,
+    known: { data: [{ name: "SIRIUS XM HOLDINGS INC" }] },
+    heldBefore: [{ investor: "berkshire-hathaway", shares: 132_878_213 }],
+    stockIdentified: true,
+    fromIsStock: false,
+  };
+  assert.deepEqual(planConversion(input), {
+    problems: [],
+    conversion: { from_cusip: "82968B103", shares_per_share: "0.1", effective_date: "2024-09-09", description: input.description, source_reference: source },
+  });
+  for (const ratio of ["0", "-1", "1/10", "abc"]) {
+    assert.deepEqual(planConversion({ ...input, ratio }).problems, [`${ratio} is not a positive number of shares per share`]);
+  }
+  assert.deepEqual(planConversion({ ...input, known: { warning: "No identifier found." } }).problems, ["OpenFIGI does not know 82968B103 as a security"]);
+  assert.match(planConversion({ ...input, heldBefore: [] }).problems[0], /no holding would change/);
+  assert.match(planConversion({ ...input, stockIdentified: false }).problems[0], /would not be matched/);
+  assert.deepEqual(planConversion({ ...input, fromIsStock: true }).problems, ["82968B103 already identifies the stock at that time"]);
+  assert.match(planConversion({ ...input, source: "press release" }).problems[0], /official record/);
 });

@@ -14,12 +14,12 @@ import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
 
 const PROJECT = new URL("..", import.meta.url).pathname;
 // Each table and the column that orders its rows.
-const TABLES: [string, string][] = [
-  ["investors", "id"], ["investor_ciks", "cik"], ["securities", "id"], ["security_identifiers", "id"],
+const KNOWN_TABLES: [string, string][] = [
+  ["investors", "id"], ["investor_ciks", "cik"], ["securities", "id"], ["security_identifiers", "id"], ["security_conversions", "id"],
   ["collection_runs", "id"], ["filings", "id"], ["holdings", "id"], ["short_interest", "id"],
 ];
 const PAGE = 4000; // Holdings rows per query, to keep each CLI response small.
-const FINGERPRINTS = `select jsonb_build_object(${TABLES.map(([table, key]) =>
+const fingerprints = (tables: [string, string][]) => `select jsonb_build_object(${tables.map(([table, key]) =>
   `'${table}', (select jsonb_build_array(count(*), md5(coalesce(string_agg(to_jsonb(x)::text, E'\\n' order by ${key}), ''))) from public.${table} x)`).join(",\n")}) as f`;
 
 const scratch = mkdtempSync(join(tmpdir(), "backup-"));
@@ -44,6 +44,14 @@ async function main() {
   const label = values.label?.replace(/[^a-z0-9-]+/gi, "-");
   const out = join(homedir(), "Backups", "stock-positioning-tracker", label ? `${stamp}-${label}` : stamp);
   mkdirSync(out, { recursive: true });
+
+  // Back up every table the live database has. A table this script does not know would be left out, so stop.
+  const existing = query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE';")
+    .map((row) => row.table_name);
+  const unknown = existing.filter((name) => !KNOWN_TABLES.some(([table]) => table === name));
+  if (unknown.length > 0) throw new Error(`Add these tables to supabase/backup.mts before backing up: ${unknown.join(", ")}`);
+  const TABLES = KNOWN_TABLES.filter(([table]) => existing.includes(table));
+  const FINGERPRINTS = fingerprints(TABLES);
 
   const live = query<{ f: Record<string, [number, string]> }>(`${FINGERPRINTS};`)[0].f;
   const backup: Record<string, string[]> = {};

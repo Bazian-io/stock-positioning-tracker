@@ -122,8 +122,8 @@ test("migrations create the research tables, all protected by RLS", async () => 
     where n.nspname = 'public' and c.relkind = 'r' order by c.relname
   `);
   assert.deepEqual(result.rows.map((row) => row.relname), [
-    "collection_runs", "filings", "holdings", "investor_ciks", "investors", "securities", "security_identifiers",
-    "short_interest",
+    "collection_runs", "filings", "holdings", "investor_ciks", "investors", "securities", "security_conversions",
+    "security_identifiers", "short_interest",
   ]);
   assert.ok(result.rows.every((row) => row.relrowsecurity));
 });
@@ -269,6 +269,26 @@ test("identifier namespaces and nonoverlapping validity windows prevent ambiguou
   await rejected(`insert into public.security_identifiers
     (security_id, identifier_type, identifier_value, valid_from, source_reference)
     values ($1, 'provider_symbol', 'EXAMPLE', '2021-01-01', 'Unscoped')`, [second.id], /check constraint/);
+});
+
+test("conversion ratios are public reference data with a positive ratio, a CUSIP and one record per conversion", async () => {
+  const stock = await security();
+  // Sirius XM's September 2024 merger: 0.1 new share for each Sirius XM share.
+  const base = { security_id: stock.id, from_cusip: "82968B103", shares_per_share: "0.1", effective_date: "2024-09-09",
+    description: "Sirius XM merger", source_reference: "https://example.com/official-record" };
+  await insert("security_conversions", base);
+  await insert("security_conversions", { ...base, from_cusip: "531229813", shares_per_share: "0.8375" });
+  await rejected(`insert into public.security_conversions (security_id, from_cusip, shares_per_share, effective_date, description, source_reference)
+    values ($1, '82968B103', 0.1, '2024-09-09', 'Again', 'Duplicate')`, [stock.id], /unique constraint/);
+  for (const [cusip, ratio] of [["82968B10", 0.1], ["82968B103", 0], ["82968B103", -1]]) {
+    await rejected(`insert into public.security_conversions (security_id, from_cusip, shares_per_share, effective_date, description, source_reference)
+      values ($1, $2, $3, '2025-01-01', 'Invalid', 'Invalid')`, [stock.id, cusip, ratio], /check constraint/);
+  }
+  await db.exec("set local role anon;");
+  const rows = (await db.query("select from_cusip, shares_per_share::text from public.security_conversions order by from_cusip")).rows;
+  assert.deepEqual(rows, [{ from_cusip: "531229813", shares_per_share: "0.8375" }, { from_cusip: "82968B103", shares_per_share: "0.1" }]);
+  await rejected(`insert into public.security_conversions (security_id, from_cusip, shares_per_share, effective_date, description, source_reference)
+    values ($1, '037833100', 1, '2025-01-01', 'Unauthorized', 'Unauthorized')`, [stock.id], /permission denied/);
 });
 
 test("short-interest corrections preserve history, deduplicate retries and allow a legitimate reversion", async () => {

@@ -9,7 +9,8 @@ import {
   quarterParts,
 } from "@/lib/portfolio";
 import {
-  EXCHANGE_NAMES, holdingSeries, lastQuarterBefore, previousQuarter, quarterChange, type Change, type QuarterHolding, type Unconfirmed,
+  EXCHANGE_NAMES, holdingSeries, lastQuarterBefore, previousQuarter, quarterChange, receivedInQuarter, type Change, type QuarterHolding,
+  type Received, type Unconfirmed,
 } from "@/lib/stock";
 import { getStock, getStockOwnership, type StockPosition } from "@/lib/stock-data";
 
@@ -34,6 +35,17 @@ function splitLabel(ratio: number): string {
   return ratio >= 1 ? `${formatNumber(ratio)}-for-1` : `1-for-${formatNumber(Math.round(1 / ratio))}`;
 }
 
+// "About 101,380,356 shares from Sirius XM's merger … on Sep 9, 2024, based on Q2 2024 holdings; +3,774,673 more than that".
+function receivedNote(received: Received, change?: Change): string {
+  const note = `About ${formatNumber(Math.round(received.shares))} shares from ${received.description} on ${formatDate(received.effectiveDate)}`;
+  if (!change) return note;
+  // Fractions of shares are paid in cash, so a difference of a few shares is not a trade.
+  const beyond = Math.round(change.shares);
+  const traded = Math.abs(beyond) > Math.max(10, received.shares * 1e-4);
+  return `${note}, based on ${quarterLabel(change.previousPeriod)} holdings${traded
+    ? `; ${beyond > 0 ? "+" : "−"}${formatNumber(Math.abs(beyond))} shares ${beyond > 0 ? "more" : "fewer"} than that` : ""}`;
+}
+
 // "Increased" with "+1,234 shares (+2.3%)", and so on. A change needs reports for both quarters.
 function describeChange(change: Change): { label: string; detail?: string } {
   const sign = (value: number) => (value > 0 ? "+" : value < 0 ? "−" : "");
@@ -45,6 +57,8 @@ function describeChange(change: Change): { label: string; detail?: string } {
       return { label: change.kind === "increased" ? "Increased" : "Decreased", detail: `${shares}${percent}` };
     case "unchanged":
       return { label: "Unchanged" };
+    case "received":
+      return { label: "Received in corporate action", detail: change.received ? receivedNote(change.received, change) : undefined };
     case "split":
       return {
         label: "Likely stock split",
@@ -94,7 +108,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   if (ticker !== requestedTicker) redirect(`/stocks/${encodeURIComponent(ticker)}`);
   const stock = await getStock(ticker);
   if (!stock) notFound();
-  const { investors, reports, positions, unconfirmed } = await getStockOwnership(stock);
+  const { investors, reports, positions, unconfirmed, conversions, convertedFrom } = await getStockOwnership(stock);
 
   // Every quarter any tracked investor reported, oldest first.
   const quarters = [...new Set(reports.map((report) => report.reportPeriod))].sort();
@@ -119,8 +133,18 @@ export default async function StockPage({ params, searchParams }: StockPageProps
       const total = unclear.get(position.reportPeriod)?.shares ?? 0;
       unclear.set(position.reportPeriod, { cusip: position.cusip, shares: total + position.shares });
     }
+    // Shares received in corporate actions, from the investor's holdings of the converted securities.
+    const received = new Map<string, Received>();
+    for (const quarter of quarters) {
+      const heldBefore = new Map<string, number>();
+      for (const position of convertedFrom.filter(longShares).filter((row) => row.reportPeriod === previousQuarter(quarter))) {
+        heldBefore.set(position.cusip, (heldBefore.get(position.cusip) ?? 0) + position.shares);
+      }
+      const receivedThen = receivedInQuarter(conversions, heldBefore, quarter);
+      if (receivedThen) received.set(quarter, receivedThen);
+    }
     const reported = new Map(reports.filter((report) => report.investorId === investor.id).map((report) => [report.reportPeriod, report]));
-    return [investor.id, holdingSeries(quarters, reported, shares, unclear)];
+    return [investor.id, holdingSeries(quarters, reported, shares, unclear, received)];
   }));
 
   const rows = investors.map((investor) => {
@@ -173,6 +197,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
           `${quarter} reported shares`,
           `${formatUsdCompact(holding.valueUsd)} reported value`,
           ...(splitRatio !== null ? [`Likely ${splitLabel(splitRatio)} stock split`] : []),
+          ...(holding.received ? [`Received in corporate action: ${receivedNote(holding.received)}`] : []),
         ]
         : holding.state === "not-held"
           ? [`${quarter}: reported, not held`]
@@ -422,6 +447,11 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                 <li>
                   Changes compare share counts with the previous quarter, only when the investor reported both. A change
                   in shares is a reported change, not proof of a trade.
+                </li>
+                <li>
+                  &ldquo;Received in corporate action&rdquo; marks shares received when other shares the investor held were
+                  converted or reclassified, such as in a merger, at the official ratio and based on its holdings reported for
+                  the quarter before. Any difference is buying or selling around that date, or fractions paid in cash.
                 </li>
                 <li>
                   &ldquo;Likely stock split&rdquo; marks a change by an exact whole-number ratio, such as 20 times the shares,

@@ -119,6 +119,9 @@ skips what is already recorded. Skipped CUSIPs need a person:
 npm run add:security -- --alias G6693N103 --ticker NU --dry-run   # a CUSIP a filer mistyped
 npm run add:security -- --predecessor 531229748 --ticker LLYVA --until 2025-12-15 \
   --source <official record of the conversion> --dry-run          # an earlier CUSIP, converted one-for-one
+npm run add:security -- --conversion 82968B103 --ticker SIRI --ratio 0.1 --date 2024-09-09 \
+  --description "Sirius XM's merger with Liberty Sirius XM Holdings" \
+  --source <official record of the ratio> --dry-run               # shares received at another ratio
 npm run add:security -- --extend-windows --dry-run                # after importing older quarters
 ```
 
@@ -138,6 +141,16 @@ listed or unknown to OpenFIGI, one whose dates would overlap the stock's other C
 not match, and any conversion where no investor's share count carried over unchanged: share counts
 from a conversion at another ratio (Sirius XM's 2024 merger gave 0.8375 or 0.1 new shares) are not
 comparable, so those are not linked.
+
+Instead, `--conversion` records the ratio in `security_conversions`: holders of the converted CUSIP
+received that many shares of the stock per share on that date (Sirius XM's merger gave 0.1 new SIRI
+share per Sirius XM share and 0.8375 per Liberty SiriusXM share; record each converted CUSIP). In the
+quarter of the conversion, the stock's page then shows the investor's shares as "Received in corporate
+action", estimated from its holdings reported for the quarter before, with any difference shown as
+buying or selling, instead of as a new position. The converted CUSIP must be real (known to OpenFIGI)
+and reported by our filings for the quarter before, the stock must have a CUSIP for the quarter of
+the conversion, and the source must be an official record stating the ratio. Holdings are not
+changed or adjusted.
 
 A CUSIP identifies a stock from the earliest quarter our filings reported it when the stock was
 added. After older quarters are imported, `--extend-windows` moves each start date back to the
@@ -170,8 +183,8 @@ Lists what a person should review:
 1. Back up first: `npm run backup:db` ([supabase/README.md](../supabase/README.md#backups)).
 2. Import, for example the new quarter after each filing deadline, and re-run the previous two or
    three quarters to pick up late amendments.
-3. Run `npm run check:data` and resolve what it lists: `--extend-windows`, `--alias` and
-   `--predecessor` for stock links, and the SEC filing itself for value questions.
+3. Run `npm run check:data` and resolve what it lists: `--extend-windows`, `--alias`,
+   `--predecessor` and `--conversion` for stock links, and the SEC filing itself for value questions.
 4. Each quarter, run `npm run check:data -- --identities` for ticker and CUSIP changes.
 
 ### Other notes
@@ -184,5 +197,5 @@ reported with `value_multiplier = 1000`. Older text-format filings, from before 
 filed as XML, are not supported.
 
 Not yet handled: notices (13F-NT and 13F-NT/A), amendments for a quarter with no original 13F-HR,
-mapping rows to `securities` (rows keep their reported CUSIPs with `security_id` empty), linking a
-stock to a predecessor converted at a ratio other than one-for-one, and scheduling.
+mapping rows to `securities` (rows keep their reported CUSIPs with `security_id` empty), and
+scheduling.

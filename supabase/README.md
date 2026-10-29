@@ -1,6 +1,6 @@
 # Research database
 
-The migrations create eight tables and five read-only research views.
+The migrations create nine tables and five read-only research views.
 They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 `authenticated`, and `service_role` roles. Authentication UI is not required.
 
@@ -12,6 +12,7 @@ They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 | `investor_ciks` | Every CIK an investor has filed under, e.g. before and after a reorganization; each CIK belongs to one investor. |
 | `securities` | Stable internal identities for security/share classes and the short-interest watchlist flag. |
 | `security_identifiers` | Verified CUSIP, ticker, FIGI and provider-symbol mappings with validity periods. |
+| `security_conversions` | Official ratios from corporate actions: holders of one CUSIP received shares of a stock (Sirius XM's 2024 merger: 0.1 new share per old share). Holdings are not adjusted. |
 | `filings` | SEC filing metadata, amendment links, source evidence, summary totals and validation state. |
 | `holdings` | Every source row, including unmapped securities and separate option positions. |
 | `short_interest` | Dated observations and their correction history, separated by provider. |
@@ -24,6 +25,7 @@ erDiagram
     filings ||--o{ holdings : contains
     securities |o--o{ holdings : identifies
     securities ||--o{ security_identifiers : has
+    securities ||--o{ security_conversions : "received in"
     securities ||--o{ short_interest : has
     collection_runs ||--o{ filings : imports
     collection_runs ||--o{ short_interest : imports
@@ -153,7 +155,7 @@ identifier of the stock, valid only for the period it identified the stock (see
 npm run backup:db -- --label before-some-change
 ```
 
-Reads every row of the eight tables through the Supabase CLI (it must be logged in
+Reads every row of the nine tables through the Supabase CLI (it must be logged in
 and linked to this project; the command refuses to run if the linked project is
 not the one in `SUPABASE_URL`) and saves them, with the list of applied
 migrations, to `~/Backups/stock-positioning-tracker/<date>-<time>-<label>/`. It
@@ -163,7 +165,7 @@ backup before every approved write.
 
 ## Access
 
-RLS is enabled on all eight tables. `anon` and `authenticated` can only read
+RLS is enabled on all nine tables. `anon` and `authenticated` can only read
 reference data (including investor CIKs), completed filings/holdings and accepted
 short-interest records.
 The views run with the caller's permissions. Public roles have no write grants,

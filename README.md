@@ -37,8 +37,8 @@ key reaches the browser. Public readers see only fully validated filings.
 
 **Database** ([details](supabase/README.md))
 
-- Eight tables: investors, their CIKs, securities, security identifiers, filings, holdings, short
-  interest and collection runs. Plus research views that turn raw filings into quarterly
+- Nine tables: investors, their CIKs, securities, security identifiers, conversion ratios from
+  corporate actions, filings, holdings, short interest and collection runs. Plus research views that turn raw filings into quarterly
   portfolios and positions.
 - The database itself verifies each filing's row count and value total against the SEC summary
   before accepting it. Completed filings cannot be changed.
@@ -76,7 +76,8 @@ key reaches the browser. Public readers see only fully validated filings.
   decreased, unchanged, new or closed), and a chart of one investor's reported shares by quarter.
   A reported zero is shown differently from a quarter with no report, and from an unclear quarter
   (shares under the stock's CUSIP outside its recorded dates). A change by an exact whole-number
-  ratio is labelled as a likely stock split rather than as buying or selling. Holdings in
+  ratio is labelled as a likely stock split rather than as buying or selling, and shares received in
+  a recorded corporate action (a merger or reclassification) are labelled as received. Holdings in
   dashboards link to stock pages, and stock pages link back to the dashboards.
 
 **Data checks and backups**
@@ -126,8 +127,9 @@ short-interest data yet.
   suitable for backtesting as of a past date.
 - **Stock splits and reorganizations.** Share counts are shown as reported, not adjusted for
   splits. A split is labelled only when the investor did not also trade that quarter. An earlier
-  CUSIP is linked to a stock only when it was converted one-for-one; holdings converted at another
-  ratio (such as Sirius XM's in September 2024) start as a new position on the stock's page.
+  CUSIP is linked to a stock only when it was converted one-for-one. Shares received at another ratio
+  (such as in Sirius XM's September 2024 merger) are labelled as received only when that conversion's
+  ratio is recorded, and are estimated from the holdings reported for the quarter before.
 - **Availability.** Supabase's free plan pauses a project after a period without activity, which
   takes the live site offline until it is restored from the Supabase dashboard.
 

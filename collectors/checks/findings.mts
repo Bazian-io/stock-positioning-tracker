@@ -142,7 +142,7 @@ export function consecutivePairs(positions: Position[], reportedQuarters: Set<st
   const byKey = new Map(longs.map((position) => [`${position.investorId}|${position.cusip}|${position.reportPeriod}`, position]));
   const holding = (position: Position): QuarterHolding => ({
     reportPeriod: position.reportPeriod, state: "held", shares: position.shares, valueUsd: position.valueUsd,
-    confidentialOmissions: false, unconfirmed: null,
+    confidentialOmissions: false, unconfirmed: null, received: null,
   });
   return longs.flatMap((current) => {
     const period = previousQuarter(current.reportPeriod);

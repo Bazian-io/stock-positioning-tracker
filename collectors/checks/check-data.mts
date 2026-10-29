@@ -1,11 +1,11 @@
 // Read-only check of the research data, to run after each import or change. It uses the publishable
 // key, which cannot write, and lists what a person should review: missing quarters, possibly mistyped
-// CUSIPs, holdings outside their CUSIP's recorded dates, values that disagree, likely stock splits and,
-// with --identities, stocks whose ticker or CUSIP has changed since they were added.
+// CUSIPs, holdings outside their CUSIP's recorded dates, values that disagree, likely stock splits, recorded
+// conversions and, with --identities, stocks whose ticker or CUSIP has changed since they were added.
 // Usage: npm run check:data [-- --identities]
 import { parseArgs } from "node:util";
 import { createClient } from "@supabase/supabase-js";
-import { nextQuarter, previousQuarter } from "../../src/lib/stock.ts";
+import { lastQuarterBefore, nextQuarter, previousQuarter } from "../../src/lib/stock.ts";
 import { EXCHANGE_MICS, isValidCusip, sameCompany, secListing, usListing } from "../securities/identify.mts";
 import { loadAll, openFigi, requireEnv, secTickers, today } from "../securities/sources.mts";
 import {
@@ -22,7 +22,7 @@ async function main() {
   if (key.startsWith("sb_secret_")) throw new Error("SUPABASE_PUBLISHABLE_KEY holds a secret key; this check reads with the publishable key only");
   const db = createClient(requireEnv("SUPABASE_URL"), key, { auth: { persistSession: false, autoRefreshToken: false } });
 
-  const [investors, quarters, positionRows, identifiers, securities] = await Promise.all([
+  const [investors, quarters, positionRows, identifiers, securities, conversions] = await Promise.all([
     loadAll<{ id: string; slug: string }>((from, to) => db.from("investors").select("id, slug").order("slug").range(from, to), "Read investors"),
     loadAll<{ investor_id: string; report_period: string; has_confidential_omissions: boolean }>((from, to) => db.from("quarterly_portfolios")
       .select("investor_id, report_period, has_confidential_omissions").order("investor_id").order("report_period").range(from, to), "Read quarters"),
@@ -37,6 +37,9 @@ async function main() {
       (from, to) => db.from("security_identifiers").select("security_id, identifier_type, identifier_value, namespace, valid_from, valid_to")
         .in("identifier_type", ["cusip", "ticker"]).order("id").range(from, to), "Read identifiers"),
     loadAll<{ id: string; issuer_name: string }>((from, to) => db.from("securities").select("id, issuer_name").order("id").range(from, to), "Read securities"),
+    loadAll<{ security_id: string; from_cusip: string; shares_per_share: string; effective_date: string; description: string }>((from, to) => db
+      .from("security_conversions").select("security_id, from_cusip, shares_per_share::text, effective_date, description")
+      .order("effective_date").order("security_id").order("from_cusip").range(from, to), "Read conversions"),
   ]);
   const slug = (investorId: string) => investors.find((investor) => investor.id === investorId)?.slug ?? investorId;
   const positions: Position[] = positionRows.map((row) => ({
@@ -84,7 +87,10 @@ async function main() {
       + "--until <conversion date> --source <record URL> --dry-run");
   }
   const linkedLater = new Set(predecessors.map((match) => `${match.cusip}|${match.securityId}`));
-  const nameMatches = suspectedTypos(positions, cusips, isValidCusip).filter((match) => !linkedLater.has(`${match.cusip}|${match.securityId}`));
+  // A CUSIP with a recorded conversion is explained: its holders' shares show as received on the stock's page.
+  const converted = new Set(conversions.map((row) => row.from_cusip));
+  const nameMatches = suspectedTypos(positions, cusips, isValidCusip)
+    .filter((match) => !linkedLater.has(`${match.cusip}|${match.securityId}`) && !converted.has(match.cusip));
   const listMatches = (kind: string, title: string, hint: ((cusip: string, ticker: string) => string) | null) => {
     const matches = nameMatches.filter((match) => match.kind === kind);
     console.log(`  ${title} (${matches.length}):`);
@@ -105,6 +111,26 @@ async function main() {
   console.log(`  Holdings under a recorded CUSIP outside its recorded dates (${outside.length}): shown as "unclear"`);
   for (const position of outside.slice(0, 20)) console.log(`    ${slug(position.investorId)} ${quarter(position.reportPeriod)} ${position.cusip} ${position.issuer}`);
   if (outside.length > 0) console.log("      check: npm run add:security -- --extend-windows --dry-run");
+  const longShares = (position: Position) => position.positionType === "long" && position.quantityType === "SH";
+  const events = [...new Set(conversions.map((row) => `${row.security_id}|${row.effective_date}`))];
+  console.log(`  Recorded conversions (${events.length}), shares received compared with the next reported holding, for information:`);
+  for (const event of events) {
+    const [securityId, effectiveDate] = event.split("|");
+    const parts = conversions.filter((row) => row.security_id === securityId && row.effective_date === effectiveDate);
+    const before = lastQuarterBefore(effectiveDate);
+    const after = nextQuarter(before);
+    console.log(`    ${tickerOf(securityId)} on ${effectiveDate}: ${parts.map((row) => `${row.from_cusip} ×${row.shares_per_share}`).join(", ")} (${parts[0].description})`);
+    for (const investor of investors) {
+      const received = parts.reduce((sum, row) => sum + positions.filter((position) => longShares(position) && position.investorId === investor.id
+        && position.reportPeriod === before && position.cusip === row.from_cusip).reduce((total, position) => total + position.shares, 0) * Number(row.shares_per_share), 0);
+      if (received === 0) continue;
+      const reportedAfter = positions.filter((position) => longShares(position) && position.investorId === investor.id && position.reportPeriod === after
+        && stockOf(position, cusips) === securityId).reduce((total, position) => total + position.shares, 0);
+      const difference = Math.round(reportedAfter - received);
+      console.log(`      ${investor.slug}: received about ${Math.round(received).toLocaleString("en-US")} from ${quarter(before)} holdings; `
+        + `reported ${reportedAfter.toLocaleString("en-US")} in ${quarter(after)} (${difference >= 0 ? "+" : ""}${difference.toLocaleString("en-US")})`);
+    }
+  }
   console.log("  Latest reported long share value linked to stock pages:");
   for (const investor of investors) {
     const latest = quarters.filter((row) => row.investor_id === investor.id).at(-1)?.report_period;

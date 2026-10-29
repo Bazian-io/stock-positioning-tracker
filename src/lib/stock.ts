@@ -15,12 +15,22 @@ export type QuarterHolding = {
   valueUsd: number;
   confidentialOmissions: boolean; // The report omitted some holdings, so "not held" is not certain.
   unconfirmed: Unconfirmed | null; // What made the quarter unclear.
+  received: Received | null; // Shares received in a corporate action during the quarter, when held.
 };
+
+// A corporate action in which holders of another security received shares of the stock at a fixed
+// ratio (Sirius XM's September 2024 merger: 0.1 new share for each Sirius XM share).
+export type Conversion = { fromCusip: string; sharesPerShare: number; effectiveDate: string; description: string };
+
+// Shares received in conversions during a quarter, estimated from the investor's holdings reported for
+// the quarter before; it may have traded between that quarter end and the conversion.
+export type Received = { shares: number; effectiveDate: string; description: string };
 
 // Shares reported under a CUSIP that is not confirmed to identify the stock in that quarter.
 export type Unconfirmed = { cusip: string; shares: number };
 
-export type ChangeKind = "increased" | "decreased" | "unchanged" | "split" | "opened" | "closed" | "not-held" | "not-comparable";
+export type ChangeKind =
+  | "increased" | "decreased" | "unchanged" | "split" | "received" | "opened" | "closed" | "not-held" | "not-comparable";
 
 export type Change = {
   kind: ChangeKind;
@@ -28,6 +38,8 @@ export type Change = {
   shares: number; // Change in shares held.
   fraction: number | null; // Relative to the previous quarter's shares, when it held some.
   splitRatio: number | null; // For "split": new shares per old share (20 for 20-for-1, 0.1 for 1-for-10).
+  // For "received": the shares received in a corporate action; shares is then the change beyond them.
+  received: Received | null;
   // For "not-comparable": the quarter without a report or with an unclear holding.
   blocker: { reportPeriod: string; reason: "no-report" | "unclear" } | null;
 };
@@ -65,13 +77,29 @@ export function identifiesStock(cusips: CusipPeriod[], cusip: string | null, rep
     && (period.validTo === null || reportPeriod < period.validTo));
 }
 
+// Shares of the stock received in conversions that took effect during the quarter ending reportPeriod,
+// from the investor's shares of each converted security (CUSIP → shares) reported for the quarter before.
+export function receivedInQuarter(conversions: Conversion[], heldBefore: Map<string, number>, reportPeriod: string): Received | null {
+  const start = previousQuarter(reportPeriod);
+  const due = conversions.filter((conversion) => conversion.effectiveDate > start && conversion.effectiveDate <= reportPeriod
+    && (heldBefore.get(conversion.fromCusip) ?? 0) > 0);
+  if (due.length === 0) return null;
+  return {
+    shares: due.reduce((sum, conversion) => sum + (heldBefore.get(conversion.fromCusip) ?? 0) * conversion.sharesPerShare, 0),
+    effectiveDate: due[0].effectiveDate,
+    description: due[0].description,
+  };
+}
+
 // The investor's holding in each quarter, from the quarters it reported, its share positions in the
-// stock, and shares it reported under the stock's CUSIPs in quarters those CUSIPs are not confirmed for.
+// stock, shares it reported under the stock's CUSIPs in quarters those CUSIPs are not confirmed for, and
+// shares it received in corporate actions.
 export function holdingSeries(
   reportPeriods: string[],
   reports: Map<string, { confidentialOmissions: boolean }>,
   positions: Map<string, { shares: number; valueUsd: number }>,
   unconfirmed: Map<string, Unconfirmed> = new Map(),
+  received: Map<string, Received> = new Map(),
 ): QuarterHolding[] {
   return reportPeriods.map((reportPeriod) => {
     const report = reports.get(reportPeriod);
@@ -85,6 +113,7 @@ export function holdingSeries(
       valueUsd: held ? position.valueUsd : 0,
       confidentialOmissions: report?.confidentialOmissions ?? false,
       unconfirmed: unclear,
+      received: held ? received.get(reportPeriod) ?? null : null,
     };
   });
 }
@@ -109,10 +138,15 @@ export function likelySplit(previous: QuarterHolding, current: QuarterHolding): 
 export function quarterChange(current: QuarterHolding, previous: QuarterHolding | undefined): Change {
   const previousPeriod = previousQuarter(current.reportPeriod);
   const notComparable = (reportPeriod: string, reason: "no-report" | "unclear"): Change =>
-    ({ kind: "not-comparable", previousPeriod, shares: 0, fraction: null, splitRatio: null, blocker: { reportPeriod, reason } });
+    ({ kind: "not-comparable", previousPeriod, shares: 0, fraction: null, splitRatio: null, received: null, blocker: { reportPeriod, reason } });
   if (current.state === "no-report" || current.state === "unclear") return notComparable(current.reportPeriod, current.state);
   if (!previous || previous.reportPeriod !== previousPeriod || previous.state === "no-report") return notComparable(previousPeriod, "no-report");
   if (previous.state === "unclear") return notComparable(previousPeriod, "unclear");
+  if (current.received) {
+    // Received in a corporate action: the change beyond the shares received.
+    const beyond = current.shares - previous.shares - current.received.shares;
+    return { kind: "received", previousPeriod, shares: beyond, fraction: null, splitRatio: null, received: current.received, blocker: null };
+  }
   const shares = current.shares - previous.shares;
   const fraction = previous.shares > 0 ? shares / previous.shares : null;
   const splitRatio = likelySplit(previous, current);
@@ -121,5 +155,5 @@ export function quarterChange(current: QuarterHolding, previous: QuarterHolding 
       ? splitRatio !== null ? "split" : shares > 0 ? "increased" : shares < 0 ? "decreased" : "unchanged"
       : "closed"
     : current.state === "held" ? "opened" : "not-held";
-  return { kind, previousPeriod, shares, fraction, splitRatio, blocker: null };
+  return { kind, previousPeriod, shares, fraction, splitRatio, received: null, blocker: null };
 }

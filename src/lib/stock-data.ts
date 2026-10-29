@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { load, PAGE_SIZE } from "./portfolio-data";
-import { identifiesStock, type CusipPeriod } from "./stock";
+import { identifiesStock, lastQuarterBefore, type Conversion, type CusipPeriod } from "./stock";
 import { readOnlySupabase } from "./supabase";
 
 // A stock (one share class of one issuer) from the securities and security_identifiers tables.
@@ -181,14 +181,32 @@ export type StockOwnership = {
   // Positions under one of the stock's CUSIPs in a quarter that CUSIP is not recorded for, e.g. before
   // the earliest filing it was first seen in when it was added. They are not counted as the stock.
   unconfirmed: StockPosition[];
+  // Corporate actions in which holders of other securities received the stock, and positions in those
+  // securities in the quarter before each, to tell shares received from shares bought.
+  conversions: Conversion[];
+  convertedFrom: StockPosition[];
 };
+
+type PositionRow = {
+  investor_id: string; report_period: string; reported_cusip: string; position_type: string; quantity_type: string; quantity: string; value_usd: string;
+};
+const POSITION_COLUMNS = "investor_id, report_period, reported_cusip, position_type, quantity_type, quantity::text, value_usd::text";
+const toPosition = (row: PositionRow): StockPosition => ({
+  investorId: row.investor_id,
+  reportPeriod: row.report_period,
+  cusip: row.reported_cusip,
+  positionType: row.position_type,
+  quantityType: row.quantity_type,
+  shares: Number(row.quantity),
+  valueUsd: Number(row.value_usd),
+});
 
 // Every tracked investor's reported positions in the stock, in every quarter. The database selects
 // the stock's rows by CUSIP (portfolio_positions), so whole portfolios are never downloaded.
 export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
   const db = readOnlySupabase();
   const cusips = [...new Set(stock.cusips.map((period) => period.cusip))];
-  const [investors, reports, positions] = await Promise.all([
+  const [investors, reports, positions, conversions] = await Promise.all([
     load<StockOwnership["investors"]>(db.from("investors").select("id, name, slug").order("name"), "investors"),
     loadAll<{ investor_id: string; report_period: string; value_usd: string; has_confidential_omissions: boolean }>(
       (from, to) => db.from("quarterly_portfolios")
@@ -196,26 +214,31 @@ export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
         .order("investor_id").order("report_period").range(from, to),
       "quarterly portfolios",
     ),
-    cusips.length === 0 ? [] : loadAll<{
-      investor_id: string; report_period: string; reported_cusip: string; position_type: string; quantity_type: string; quantity: string; value_usd: string;
-    }>(
+    cusips.length === 0 ? [] : loadAll<PositionRow>(
       (from, to) => db.from("portfolio_positions")
-        .select("investor_id, report_period, reported_cusip, position_type, quantity_type, quantity::text, value_usd::text")
+        .select(POSITION_COLUMNS)
         .in("reported_cusip", cusips)
         .order("investor_id").order("report_period").order("reported_cusip").order("position_type").order("quantity_type")
         .range(from, to),
       "positions",
     ),
+    load<{ from_cusip: string; shares_per_share: string; effective_date: string; description: string }[]>(
+      db.from("security_conversions").select("from_cusip, shares_per_share::text, effective_date, description")
+        .eq("security_id", stock.securityId).order("effective_date").order("from_cusip"),
+      "conversions",
+    ),
   ]);
-  const all = positions.map((row) => ({
-    investorId: row.investor_id,
-    reportPeriod: row.report_period,
-    cusip: row.reported_cusip,
-    positionType: row.position_type,
-    quantityType: row.quantity_type,
-    shares: Number(row.quantity),
-    valueUsd: Number(row.value_usd),
-  }));
+  // The converted securities' positions in the quarter before each conversion.
+  const convertedFrom = conversions.length === 0 ? [] : await loadAll<PositionRow>(
+    (from, to) => db.from("portfolio_positions")
+      .select(POSITION_COLUMNS)
+      .in("reported_cusip", [...new Set(conversions.map((row) => row.from_cusip))])
+      .in("report_period", [...new Set(conversions.map((row) => lastQuarterBefore(row.effective_date)))])
+      .order("investor_id").order("report_period").order("reported_cusip").order("position_type").order("quantity_type")
+      .range(from, to),
+    "converted positions",
+  );
+  const all = positions.map(toPosition);
   const confirmed = (position: StockPosition) => identifiesStock(stock.cusips, position.cusip, position.reportPeriod);
   return {
     investors,
@@ -227,5 +250,12 @@ export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
     })),
     positions: all.filter(confirmed),
     unconfirmed: all.filter((position) => !confirmed(position)),
+    conversions: conversions.map((row) => ({
+      fromCusip: row.from_cusip,
+      sharesPerShare: Number(row.shares_per_share),
+      effectiveDate: row.effective_date,
+      description: row.description,
+    })),
+    convertedFrom: convertedFrom.map(toPosition),
   };
 }
