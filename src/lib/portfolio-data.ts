@@ -29,10 +29,10 @@ export type QuarterFiling = {
   secUrl: string;
 };
 
-const PAGE_SIZE = 1000; // Supabase's default maximum rows per response.
+export const PAGE_SIZE = 1000; // Supabase's default maximum rows per response.
 
 // supabase-js reports failures in the result instead of throwing.
-async function load<T>(request: PromiseLike<{ data: T | null; error: { message: string } | null }>, what: string) {
+export async function load<T>(request: PromiseLike<{ data: T | null; error: { message: string } | null }>, what: string) {
   const { data, error } = await request;
   if (error) throw new Error(`Could not load ${what}: ${error.message}`);
   return data as T;

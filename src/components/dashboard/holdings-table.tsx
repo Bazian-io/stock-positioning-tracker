@@ -14,11 +14,12 @@ type HoldingsTableProps = {
   caption: string;
   links: TableLink[];
   status?: string; // e.g. "Positions 201–400 of 5,696".
+  stockTickers: Record<string, string>; // Ticker by CUSIP, for positions with a stock page.
 };
 
 // Largest positions first. Share bars are scaled to the quarter's largest position; the
 // percentages are shares of the quarter's total reported value.
-export function HoldingsTable({ positions, firstRank, largestShare, caption, links, status }: HoldingsTableProps) {
+export function HoldingsTable({ positions, firstRank, largestShare, caption, links, status, stockTickers }: HoldingsTableProps) {
   return (
     <>
       <div className={styles.tableScroll}>
@@ -40,7 +41,13 @@ export function HoldingsTable({ positions, firstRank, largestShare, caption, lin
               <tr key={[position.cusip, position.issuer, position.titleOfClass, position.positionType, position.quantityType].join("|")}>
                 <td className={styles.rank}>{formatNumber(firstRank + index)}</td>
                 <th scope="row" className={styles.security}>
-                  <span className={styles.issuer}>{position.issuer}</span>
+                  {position.cusip && stockTickers[position.cusip] ? (
+                    <Link href={`/stocks/${encodeURIComponent(stockTickers[position.cusip])}`} className={styles.issuer}>
+                      {position.issuer}
+                    </Link>
+                  ) : (
+                    <span className={styles.issuer}>{position.issuer}</span>
+                  )}
                   <span className={styles.securityClass}>
                     {[position.titleOfClass, OPTION_LABELS[position.positionType]].filter(Boolean).join(" · ")}
                   </span>

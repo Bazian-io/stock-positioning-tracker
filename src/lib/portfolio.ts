@@ -42,6 +42,8 @@ const axisUsd = new Intl.NumberFormat("en-US", {
 });
 const wholeUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 const wholeNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const compactNumber = new Intl.NumberFormat("en-US", { notation: "compact", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const axisNumber = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 const percent = new Intl.NumberFormat("en-US", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const calendarDate = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 // EDGAR dates filings in US Eastern time.
@@ -56,6 +58,8 @@ export const formatUsdCompact = (value: number) => compactUsd.format(value); // 
 export const formatUsdAxis = (value: number) => axisUsd.format(value); // $0, $100B, $2.5B
 export const formatUsd = (value: number) => wholeUsd.format(value); // $299,253,556,246
 export const formatNumber = (value: number) => wholeNumber.format(value);
+export const formatNumberCompact = (value: number) => compactNumber.format(value); // 227.92M
+export const formatNumberAxis = (value: number) => axisNumber.format(value); // 0, 100M, 2.5B
 export const formatPercent = (fraction: number) => (fraction > 0 && fraction < 0.0005 ? "<0.1%" : percent.format(fraction));
 export const formatDate = (isoDate: string) => calendarDate.format(new Date(`${isoDate.slice(0, 10)}T00:00:00Z`));
 export const formatFilingDate = (timestamp: string) => secDate.format(new Date(timestamp));

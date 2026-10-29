@@ -77,6 +77,25 @@ CIK that already belongs to another investor or that reported a quarter one of t
 also reported. The collector then searches all linked CIKs for each quarter, accepts amendments
 filed under any of them, and stops if two CIKs filed an original report for the same quarter.
 
+## Stocks
+
+Stock pages find a stock's holdings by its CUSIP. Add a stock (one share class) with its CUSIP and
+ticker:
+
+```sh
+npm run add:security -- --cusip 037833100 --ticker AAPL --dry-run   # show the evidence only
+npm run add:security -- --cusip 037833100 --ticker AAPL
+npm run add:security -- --cusip 02079K305 --ticker GOOGL --share-class "Class A"
+```
+
+The command checks the CUSIP's check digit, that OpenFIGI maps the CUSIP to the ticker as a US
+equity, that SEC's company ticker file lists the ticker on Nasdaq or NYSE, and that our filings
+report the CUSIP. It then adds a `securities` row and two `security_identifiers`: the CUSIP, valid
+from the earliest quarter our filings report it (that filing is the evidence), and the ticker on
+its exchange's MIC, valid from the day SEC's file was read. Each share class has its own CUSIP and
+ticker, so classes stay separate. Holdings themselves are not changed. A CUSIP or ticker that is
+already recorded is left as it is.
+
 ### Other notes
 
 SEC access: requests send `SEC_USER_AGENT`, are spaced at least 200 ms apart (SEC allows 10 per

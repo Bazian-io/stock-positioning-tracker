@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  axisTicks, formatDate, formatFilingDate, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact, quarterLabel, secFilingUrl,
+  axisTicks, formatDate, formatFilingDate, formatNumberAxis, formatNumberCompact, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact,
+  quarterLabel, secFilingUrl,
 } from "./portfolio.ts";
 
 test("axis ticks start at zero and end at a round number above the maximum", () => {
@@ -16,6 +17,8 @@ test("values, dates and quarters are formatted for readers", () => {
   assert.equal(formatUsdCompact(580_504), "$580.50K");
   assert.deepEqual([0, 100e9, 2.5e9].map(formatUsdAxis), ["$0", "$100B", "$2.5B"]);
   assert.equal(formatUsd(299_253_556_246), "$299,253,556,246");
+  assert.equal(formatNumberCompact(227_917_808), "227.92M");
+  assert.deepEqual([0, 100e6, 2.5e9].map(formatNumberAxis), ["0", "100M", "2.5B"]);
   assert.equal(formatPercent(0.21985), "22.0%");
   assert.equal(formatPercent(0.0000019), "<0.1%");
   assert.equal(formatDate("2026-06-30"), "Jun 30, 2026");

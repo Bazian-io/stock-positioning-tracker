@@ -394,6 +394,60 @@
   opacity: 0;
 }
 
+/* A reported zero is a flat mark on the baseline; a missing report is a faint hatched column. */
+.bar[data-state="zero"] {
+  height: 3px;
+  border-radius: 1px;
+}
+
+.bar[data-state="missing"],
+.columnLink:hover .bar[data-state="missing"],
+.columnLink:focus-visible .bar[data-state="missing"] {
+  height: 100%;
+  border: 1px dashed var(--axis);
+  border-bottom: 0;
+  background: repeating-linear-gradient(135deg, transparent 0 5px, var(--grid) 5px 6px);
+}
+
+.bar[data-state="missing"][data-selected] {
+  border-color: var(--accent);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--deemphasis);
+}
+
+.swatch[data-state="zero"] {
+  height: 3px;
+  border-radius: 1px;
+  background: var(--deemphasis-strong);
+}
+
+.swatch[data-state="missing"] {
+  border: 1px dashed var(--axis);
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--grid) 3px 4px);
+}
+
 .xAxis {
   display: flex;
   margin: 8px 0 0 52px;
@@ -563,6 +617,37 @@
   align-items: baseline;
   gap: 8px 20px;
   font-size: 14px;
+}
+
+/* Group headings inside a table, e.g. investors without a report. */
+.groupRow th {
+  padding-top: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Stock search */
+
+.search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.searchInput {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.search .button {
+  align-self: auto;
 }
 
 /* Sources and notes */

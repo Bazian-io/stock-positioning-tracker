@@ -134,6 +134,12 @@ including concurrent inserts. Dates must be evidenced; never invent historical
 coverage to make a match. Keep uncertain identifiers on the original holding
 until a verified mapping is available.
 
+The website matches holdings to a stock when a page is read: rows whose
+`reported_cusip` is one of the stock's CUSIP identifiers, for quarters inside that
+identifier's validity. `holdings.security_id` is not filled in, so nothing has to be
+re-mapped after an import or a corrected identifier. An index on
+`holdings.reported_cusip` keeps these lookups direct.
+
 ## Access
 
 RLS is enabled on all eight tables. `anon` and `authenticated` can only read

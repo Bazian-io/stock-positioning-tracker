@@ -11,15 +11,18 @@ export type ChartQuarter = {
   year: number;
   valueLabel: string; // "$299.25B"
   height: number; // Bar height, percent of the plot.
-  amended: boolean;
+  description: string; // Accessible name, e.g. "Q2 2026: $299.25B reported".
+  details: string[]; // Further tooltip lines.
+  state?: "zero" | "missing"; // A reported zero, or no report: drawn differently from a bar.
 };
 
 export type ChartTick = { label: string; position: number };
 
-// Reported value per quarter as columns: the selected quarter in the accent color, the others in
-// a recessive gray. Each column is a link to its quarter, with a tooltip on hover and focus.
+// A value per quarter as columns: the selected quarter in the accent color, the others in a
+// recessive gray. A reported zero is a flat mark and a missing report a hatched column, so neither
+// reads as the other. Each column is a link to its quarter, with a tooltip on hover and focus.
 export function ValueChart({ quarters, ticks, selected }: { quarters: ChartQuarter[]; ticks: ChartTick[]; selected: string }) {
-  const { showQuarter } = useQuarterNavigation();
+  const { quarterHref, showQuarter } = useQuarterNavigation();
 
   function onClick(event: MouseEvent<HTMLAnchorElement>, reportPeriod: string) {
     // Let modified clicks open the link in a new tab or window.
@@ -46,14 +49,14 @@ export function ValueChart({ quarters, ticks, selected }: { quarters: ChartQuart
             return (
               <li key={quarter.reportPeriod} className={styles.column} data-edge={edge}>
                 <a
-                  href={`?quarter=${quarter.reportPeriod}`}
+                  href={quarterHref(quarter.reportPeriod)}
                   className={styles.columnLink}
                   style={{ "--bar": `${quarter.height}%` } as CSSProperties}
                   aria-current={isSelected ? "true" : undefined}
-                  aria-label={`${quarter.label}: ${quarter.valueLabel} reported${quarter.amended ? ", amended" : ""}`}
+                  aria-label={quarter.description}
                   onClick={(event) => onClick(event, quarter.reportPeriod)}
                 >
-                  <span className={styles.bar} data-selected={isSelected || undefined} />
+                  <span className={styles.bar} data-selected={isSelected || undefined} data-state={quarter.state} />
                   {isSelected && (
                     <span className={styles.capLabel} style={{ bottom: `calc(${labelHeight}% + 6px)` }} aria-hidden="true">
                       {quarter.valueLabel}
@@ -61,8 +64,9 @@ export function ValueChart({ quarters, ticks, selected }: { quarters: ChartQuart
                   )}
                   <span className={styles.tooltip} aria-hidden="true">
                     <strong>{quarter.valueLabel}</strong>
-                    <span>{quarter.label} reported value</span>
-                    {quarter.amended && <span>Includes amended filings</span>}
+                    {quarter.details.map((detail) => (
+                      <span key={detail}>{detail}</span>
+                    ))}
                   </span>
                 </a>
               </li>

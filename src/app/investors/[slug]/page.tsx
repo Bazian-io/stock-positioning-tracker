@@ -12,6 +12,7 @@ import {
 import {
   getInvestorBySlug, getPositions, getQuarterFilings, getQuarterSummaries, type QuarterFiling,
 } from "@/lib/portfolio-data";
+import { getStockTickers } from "@/lib/stock-data";
 
 type InvestorPageProps = {
   params: Promise<{ slug: string }>;
@@ -54,6 +55,11 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
     getQuarterFilings(investor, selected.reportPeriod),
   ]);
   if (positions.length === 0 && pageNumber > 1) notFound();
+  // Positions in a stock we can identify link to its stock page.
+  const stockTickers = await getStockTickers(
+    positions.flatMap((position) => (position.cusip ? [position.cusip] : [])),
+    selected.reportPeriod,
+  );
   const original = filings.find((filing) => filing.amendmentType === "none");
   const amendments = filings.filter((filing) => filing.amendmentType !== "none");
   const label = quarterLabel(selected.reportPeriod);
@@ -94,7 +100,8 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
     ...quarterParts(quarter.reportPeriod),
     valueLabel: formatUsdCompact(quarter.valueUsd),
     height: (quarter.valueUsd / scaleMax) * 100,
-    amended: quarter.amended,
+    description: `${quarterLabel(quarter.reportPeriod)}: ${formatUsdCompact(quarter.valueUsd)} reported${quarter.amended ? ", amended" : ""}`,
+    details: [`${quarterLabel(quarter.reportPeriod)} reported value`, ...(quarter.amended ? ["Includes amended filings"] : [])],
   }));
   const chartTicks = ticks.map((tick) => ({ label: formatUsdAxis(tick), position: (tick / scaleMax) * 100 }));
 
@@ -248,6 +255,7 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
               caption={`Largest holdings, ${label}, combined by security`}
               links={tableLinks}
               status={tableStatus}
+              stockTickers={stockTickers}
             />
           </section>
 

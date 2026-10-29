@@ -22,12 +22,10 @@ export default function HomePage() {
           </span>
         </Link>
         <Link href="/stocks" className="section-card">
-          <span className="section-name">
-            Stock Analysis <span className="section-status">In development</span>
-          </span>
+          <span className="section-name">Stock Analysis</span>
           <span className="section-detail">
-            See which tracked investors own a stock and how their reported holdings change across quarters,
-            alongside short interest.
+            Search a stock and see which tracked investors report holding it, and how their holdings change from
+            quarter to quarter.
           </span>
           <span className="section-arrow" aria-hidden="true">
             →

@@ -38,8 +38,8 @@ key reaches the browser. Public readers see only fully validated filings.
 **Database** ([details](supabase/README.md))
 
 - Eight tables: investors, their CIKs, securities, security identifiers, filings, holdings, short
-  interest and collection runs. Plus four research views that turn raw filings into quarterly
-  portfolios.
+  interest and collection runs. Plus research views that turn raw filings into quarterly
+  portfolios and positions.
 - The database itself verifies each filing's row count and value total against the SEC summary
   before accepting it. Completed filings cannot be changed.
 - Amendments are applied automatically: a restatement replaces a report, and a new-holdings
@@ -53,6 +53,11 @@ key reaches the browser. Public readers see only fully validated filings.
 - Reads every stored row back and compares it field by field with the SEC filing.
 - Supports investors that filed under several CIKs, e.g. after a corporate reorganization.
 
+**Stock identification** (`npm run add:security`, [details](collectors/README.md#stocks))
+
+- Adds a stock (one share class) with its CUSIP and ticker after OpenFIGI, SEC's company ticker
+  file and our filings agree. Holdings are matched to stocks by CUSIP when a page is read.
+
 **Web app**
 
 - Two research sections, Investors and Stocks, linked from the homepage and the main navigation.
@@ -63,7 +68,13 @@ key reaches the browser. Public readers see only fully validated filings.
   in the database when it is added, so it stays the same if the investor's name changes. Portfolio value by quarter (chart
   and table), quarter selection, largest holdings, and the SEC filings behind each quarter with
   links to EDGAR. Positions are combined in the database, so large filers load quickly.
-- Stocks page: a placeholder describing the planned Stock Analysis section.
+- Stocks page: the stocks that can be matched to holdings, with search by ticker, company name or
+  CUSIP.
+- Stock pages, `/stocks/[ticker]` (e.g. `/stocks/AAPL`): which tracked investors report holding the
+  stock in a quarter, their shares, values and change from the previous quarter (increased,
+  decreased, unchanged, new or closed), and a chart of one investor's reported shares by quarter.
+  A reported zero is shown differently from a quarter with no report. Holdings in dashboards link
+  to stock pages, and stock pages link back to the dashboards.
 
 ## Current data
 
@@ -74,16 +85,16 @@ As of 28 October 2026:
 | Berkshire Hathaway Inc | 1067983 | 20 quarters, Q3 2021 – Q2 2026 | 24 (3 quarters amended) | Q2 2026: 89 rows, $299.25B |
 | BlackRock, Inc. | 2012383 (since Q3 2024), 1364742 (BlackRock Inc. until Q2 2024) | Q2 2026 only | 1 | Q2 2026: 49,968 rows, $6.73T |
 
-Database totals: 2 investors, 25 filings, 52,828 holding rows. No short-interest or
-security-mapping data yet.
+Database totals: 2 investors, 25 filings, 52,828 holding rows. One stock is identified: Apple
+(AAPL, CUSIP 037833100). No short-interest data yet.
 
 ## Unfinished features
 
 - **Short-interest collector.** The database tables and views exist; nothing fills them yet.
 - **Remaining investors.** Only Berkshire Hathaway has full history. BlackRock has one quarter,
   and the other ~18 investors have not been imported.
-- **Stock Analysis.** Holdings keep the CUSIP reported in each filing. They are not yet mapped
-  to securities and tickers, so the Stocks section is a placeholder.
+- **More stocks.** Only Apple has been identified; each further stock is added with
+  `npm run add:security`. Stock prices and short interest are not shown yet.
 - **Automation.** Collection runs manually, one investor at a time. There is no investor list
   and no scheduled job (GitHub Actions is planned).
 
