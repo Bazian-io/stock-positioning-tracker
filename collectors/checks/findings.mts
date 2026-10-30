@@ -64,18 +64,28 @@ export function suspectedTypos(positions: Position[], cusips: CusipRecord[], val
   return [...typos.values()].map((typo) => ({ ...typo, reportPeriods: typo.reportPeriods.sort() }));
 }
 
-export type LikelyPredecessor = { cusip: string; securityId: string; investorId: string; issuer: string; lastPeriod: string; shares: number };
+export type LikelyPredecessor = {
+  cusip: string; securityId: string; investorId: string; issuer: string; lastPeriod: string; shares: number; investors: number;
+};
 
 // An unrecorded CUSIP whose holding ends in one quarter while the same investor's holding of a recorded
 // stock starts in the next quarter with exactly the same share count: most likely the stock's earlier
 // CUSIP, replaced one-for-one in a corporate action. Its quarters show as "reported, not held" on the
 // stock's page until linked with --predecessor. reportedQuarters: "investorId|reportPeriod".
+// With many investors the same count turns up by chance (a fund sold, a stock bought), so a replaced
+// CUSIP must also no longer be reported by anyone afterwards, and either have the stock's name
+// (sameStock) or have carried over for at least two investors.
 export function likelyPredecessors(
   positions: Position[],
   cusips: CusipRecord[],
   reportedQuarters: Set<string>,
   nextQuarter: (period: string) => string,
+  sameStock: (issuer: string, securityId: string) => boolean,
 ): LikelyPredecessor[] {
+  const lastReported = new Map<string, string>(); // CUSIP → latest quarter any investor reported it
+  for (const position of positions) {
+    if (position.cusip && position.reportPeriod > (lastReported.get(position.cusip) ?? "")) lastReported.set(position.cusip, position.reportPeriod);
+  }
   const recorded = new Set(cusips.map((record) => record.cusip));
   const stockShares = new Map<string, Map<string, number>>(); // "investor|period" → stock → shares
   const unrecorded = new Map<string, Position>(); // "investor|cusip|period"
@@ -93,18 +103,22 @@ export function likelyPredecessors(
     }
   }
   const found = new Map<string, LikelyPredecessor>();
+  const carriedOver = new Map<string, Set<string>>(); // "cusip|stock" → investors whose count carried over
   for (const old of unrecorded.values()) {
     const next = nextQuarter(old.reportPeriod);
     if (!reportedQuarters.has(`${old.investorId}|${next}`) || unrecorded.has(`${old.investorId}|${old.cusip}|${next}`)) continue;
+    if ((lastReported.get(old.cusip ?? "") ?? "") > old.reportPeriod) continue;
     const before = stockShares.get(`${old.investorId}|${old.reportPeriod}`);
     for (const [securityId, shares] of stockShares.get(`${old.investorId}|${next}`) ?? []) {
       if (shares !== old.shares || before?.has(securityId)) continue;
-      found.set(`${old.cusip}|${securityId}`, {
-        cusip: old.cusip ?? "", securityId, investorId: old.investorId, issuer: old.issuer, lastPeriod: old.reportPeriod, shares,
+      const key = `${old.cusip}|${securityId}`;
+      carriedOver.set(key, (carriedOver.get(key) ?? new Set<string>()).add(old.investorId));
+      found.set(key, {
+        cusip: old.cusip ?? "", securityId, investorId: old.investorId, issuer: old.issuer, lastPeriod: old.reportPeriod, shares, investors: carriedOver.get(key)!.size,
       });
     }
   }
-  return [...found.values()];
+  return [...found.values()].filter((match) => match.investors >= 2 || sameStock(match.issuer, match.securityId));
 }
 
 // Positions under a recorded CUSIP in a quarter none of its records covers. Stock pages show these
@@ -117,9 +131,10 @@ export function outsideWindows(positions: Position[], cusips: CusipRecord[]): Po
 const pricePerShare = (position: Position) => position.valueUsd / position.shares;
 
 // The same CUSIP in the same quarter is valued at the same quarter-end price by every filer, so value
-// per share should agree. A larger gap points to a mistyped value or share count, or a value reported in
+// per share should agree. Filers' price sources differ by a few percent (exchange rates, closing prices),
+// so only a larger gap counts: it points to a mistyped value or share count, or a value reported in
 // thousands of dollars instead of dollars.
-export function priceDisagreements(positions: Position[], tolerance = 0.02): Position[][] {
+export function priceDisagreements(positions: Position[], tolerance = 0.1): Position[][] {
   const groups = new Map<string, Position[]>();
   for (const position of positions.filter(isLongShares)) {
     if (!position.cusip) continue;
@@ -211,10 +226,24 @@ export function marketSplits(positions: Position[], previousQuarter: (period: st
   return splits.sort((a, b) => a.reportPeriod.localeCompare(b.reportPeriod) || a.cusip.localeCompare(b.cusip));
 }
 
-// Value per share that moved more than fourfold between quarters without the pattern of a split: a
-// likely error in the value or the share count.
-export function priceJumps(pairs: QuarterPair[], factor = 4): QuarterPair[] {
-  return pairs.filter((pair) => pair.splitRatio === null && (pair.priceRatio > factor || pair.priceRatio < 1 / factor));
+// Value per share that moved more than fourfold between quarters without the pattern of a split, while
+// other investors holding the same CUSIP saw no such move: a likely error in the value or the share
+// count. Small stocks can crash or soar for every holder; that is a price move. With no other holder to
+// compare, only a move of `alone` times or more counts (a value in thousands is a thousandfold).
+export function priceJumps(pairs: QuarterPair[], factor = 4, alone = 100): QuarterPair[] {
+  const byQuarter = new Map<string, QuarterPair[]>();
+  for (const pair of pairs) {
+    const key = `${pair.current.cusip}|${pair.current.reportPeriod}`;
+    byQuarter.set(key, [...(byQuarter.get(key) ?? []), pair]);
+  }
+  const beyond = (ratio: number, limit: number) => ratio > limit || ratio < 1 / limit;
+  return pairs.filter((pair) => {
+    if (pair.splitRatio !== null || !beyond(pair.priceRatio, factor)) return false;
+    const others = (byQuarter.get(`${pair.current.cusip}|${pair.current.reportPeriod}`) ?? [])
+      .filter((other) => other.current.investorId !== pair.current.investorId).map((other) => other.priceRatio).sort((a, b) => a - b);
+    if (others.length === 0) return beyond(pair.priceRatio, alone);
+    return beyond(pair.priceRatio / others[Math.floor(others.length / 2)], factor);
+  });
 }
 
 // A quarter's 13F filing deadline: 45 days after the quarter ends, or the next business day when that

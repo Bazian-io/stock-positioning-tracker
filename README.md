@@ -125,8 +125,8 @@ but repeats the whole report, so importing it would double count.
 Database totals: 20 investors, 394 filings, 430,587 holding rows, 145 MB. 4,621 stocks are
 identified: BlackRock's 500 largest positions and every listed stock the other investors reported,
 except ETFs, funds, warrants, units and CUSIPs that need a person (see
-[collectors/README.md](collectors/README.md#stocks)), with 37 official conversion ratios from
-corporate actions, 30 of them stock splits. No short-interest data yet.
+[collectors/README.md](collectors/README.md#stocks)), with 44 official conversion ratios from
+corporate actions, 36 of them stock splits. No short-interest data yet.
 
 ## Unfinished features
 
@@ -134,9 +134,10 @@ corporate actions, 30 of them stock splits. No short-interest data yet.
 - **BlackRock history.** BlackRock has one quarter; its earlier quarters are not imported (see
   Storage below).
 - **More stocks.** Delisted stocks and stocks whose CUSIP changed (such as Exxon Mobil's) have no
-  stock page yet; see `npm run add:security`. Renamed companies whose filers used the old name
-  (such as Anthem, now Elevance Health) show older quarters as "unclear" until a person confirms the
-  rename. Stock prices and short interest are not shown yet.
+  stock page yet; see `npm run add:security`. Some earlier CUSIPs are not linked yet, so those
+  stocks' pages start later: Honeywell (before its June 2026 reverse split), Canadian Pacific (before
+  April 2023), Ginkgo Bioworks (before its August 2024 reverse split), and smaller ones that
+  `npm run check:data` lists. Stock prices and short interest are not shown yet.
 - **Automation.** Collection runs manually, one investor at a time. There is no investor list
   and no scheduled job (GitHub Actions is planned).
 
@@ -154,14 +155,16 @@ corporate actions, 30 of them stock splits. No short-interest data yet.
   suitable for backtesting as of a past date.
 - **Stock splits and reorganizations.** Share counts are shown as reported, not adjusted for
   splits. A split recorded from the company's announcement is labelled "Stock split", with any
-  trading that quarter shown separately; splits that changed the CUSIP (Lam Research, Super Micro
-  Computer, Arista Networks in 2024) are not recorded yet. An unrecorded split is labelled as likely
+  trading that quarter shown separately, including splits that changed the CUSIP (such as Lam
+  Research's in 2024). An unrecorded split is labelled as likely
   only when the investor did not also trade that quarter, and for 2- and
   3-for-1 only when the price moved little, since round-number trades can look the same. A reverse
   split is labelled only when another tracked investor's holding changed by the same ratio. An earlier
-  CUSIP is linked to a stock only when it was converted one-for-one. Shares received at another ratio
-  (such as in Sirius XM's September 2024 merger) are labelled as received only when that conversion's
-  ratio is recorded, and are estimated from the holdings reported for the quarter before.
+  CUSIP is linked to a stock only when it was converted one-for-one or in a split. Shares received at
+  another ratio (such as in Sirius XM's September 2024 merger, or AstraZeneca's 2026 exchange of two
+  ADSs per ordinary share) are labelled as received only when that conversion's ratio is recorded,
+  and are estimated from the holdings reported for the quarter before; holdings of the old security
+  before then are not shown on the stock's page.
 - **Availability.** Supabase's free plan pauses a project after a period without activity, which
   takes the live site offline until it is restored from the Supabase dashboard.
 

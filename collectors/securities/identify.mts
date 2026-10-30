@@ -325,6 +325,12 @@ export function planEarlierStart(
 // next quarter, and how its reported value per share changed between them (null without a value).
 export type Continuity = { investor: string; before: number; after: number; priceRatio: number | null };
 
+// The investor's share count carried over the conversion unchanged, apart from the ratio: within one
+// share, since a split pays fractions of shares in cash (a 1-for-3 split of 1,000 shares gives 333).
+export function carriedOver(row: Continuity, ratio = 1): boolean {
+  return Math.abs(row.before * ratio - row.after) < 1;
+}
+
 // An earlier CUSIP of a stock, replaced in a corporate action that converted it one-for-one (Liberty
 // Media's Liberty Live tracking stock into Liberty Live Holdings on 15 December 2025): recorded as a CUSIP
 // of the stock from the earliest quarter our filings report it until the conversion date. It must be a
@@ -334,7 +340,9 @@ export type Continuity = { investor: string; before: number; after: number; pric
 // one-for-one (statedOneForOne), it is enough that every investor's value per share stayed within −30%
 // to +45% across the conversion, as a share price does in a quarter, which rules out conversions such as
 // 0.1 new share per old share. Conversions at other ratios are not linked: their share counts are not
-// comparable.
+// comparable. The exception is a stock split that also replaced the CUSIP (Lam Research's 10-for-1 on
+// 3 October 2024): with splitRatio, the official record states the split, and share counts and value per
+// share are compared after adjusting for it. Record the split itself from the old CUSIP afterwards.
 export function planPredecessor(input: {
   cusip: string;
   stockName: string;
@@ -346,9 +354,12 @@ export function planPredecessor(input: {
   source: string; // An official record of the conversion.
   continuity: Continuity[];
   statedOneForOne?: boolean; // The person confirms the official record states a one-for-one conversion.
+  splitRatio?: number; // The person confirms the official record states a split of this many shares per share.
 }): { identifier: PlannedIdentifier | null; problems: string[] } {
-  const { cusip, stockName, stockCusips, listed, known, filings, until, source, continuity, statedOneForOne = false } = input;
+  const { cusip, stockName, stockCusips, listed, known, filings, until, source, continuity, statedOneForOne = false, splitRatio } = input;
   const problems: string[] = [];
+  const ratio = splitRatio ?? 1;
+  if (splitRatio !== undefined && !(splitRatio > 0 && splitRatio !== 1)) problems.push(`${splitRatio} is not a split ratio (a positive number other than 1)`);
   if (!isValidCusip(cusip)) problems.push(`${cusip} is not a valid CUSIP`);
   const record = (known as { data?: { name?: string }[] } | null)?.data ?? [];
   if (record.length === 0) problems.push(`OpenFIGI does not know ${cusip} as a security`);
@@ -364,16 +375,23 @@ export function planPredecessor(input: {
     const overlapping = stockCusips.filter((window) => window.validFrom < until && (window.validTo === null || window.validTo > filings.firstPeriod));
     for (const window of overlapping) problems.push(`The stock's CUSIP ${window.cusip} already applies from ${window.validFrom}, before ${until}`);
   }
-  const priced = (row: Continuity) => row.priceRatio !== null && row.priceRatio >= 0.7 && row.priceRatio <= 1.45;
+  // Value per share after adjusting for a split: a 10-for-1 split makes each new share worth a tenth.
+  const adjusted = (row: Continuity) => (row.priceRatio === null ? null : row.priceRatio * ratio);
+  const priced = (row: Continuity) => adjusted(row) !== null && adjusted(row)! >= 0.7 && adjusted(row)! <= 1.45;
+  // An investor that sold all its shares in the quarter has no value per share afterwards to compare.
+  const comparable = continuity.filter((row) => row.priceRatio !== null);
   if (continuity.length === 0) problems.push("No investor reported both the old CUSIP's last quarter and the next quarter, so the conversion cannot be checked");
-  else if (!continuity.some((row) => row.before === row.after)) {
+  else if (!continuity.some((row) => carriedOver(row, ratio))) {
     const counts = continuity.map((row) => `${row.investor}: ${row.before} → ${row.after}`).join(", ");
-    if (!statedOneForOne) {
+    if (!statedOneForOne && splitRatio === undefined) {
       problems.push(`No investor's share count carried over unchanged (${counts}); the conversion may not be one-for-one. `
         + "If the official record states one-for-one, add --stated-one-for-one to check value per share instead");
-    } else if (!continuity.every(priced)) {
-      problems.push(`Value per share changed by ${continuity.map((row) => `×${row.priceRatio?.toFixed(2) ?? "?"} (${row.investor})`).join(", ")} `
-        + "across the conversion, outside what a one-for-one conversion allows (×0.70 to ×1.45)");
+    } else if (comparable.length === 0) {
+      problems.push(`No investor held the stock after the conversion (${counts}), so value per share cannot be compared`);
+    } else if (!comparable.every(priced)) {
+      problems.push(`Value per share changed by ${comparable.map((row) => `×${adjusted(row)!.toFixed(2)} (${row.investor})`).join(", ")} `
+        + `across the conversion${splitRatio === undefined ? "" : ` after adjusting for the split`}, outside what a `
+        + `${splitRatio === undefined ? "one-for-one conversion" : `split of ${splitRatio} shares per share`} allows (×0.70 to ×1.45)`);
     }
   }
   if (problems.length > 0 || !filings) return { identifier: null, problems };

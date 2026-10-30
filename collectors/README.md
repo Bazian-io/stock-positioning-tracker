@@ -148,6 +148,8 @@ skips what is already recorded. Skipped CUSIPs need a person:
 npm run add:security -- --alias G6693N103 --ticker NU --dry-run   # a CUSIP a filer mistyped
 npm run add:security -- --predecessor 531229748 --ticker LLYVA --until 2025-12-15 \
   --source <official record of the conversion> --dry-run          # an earlier CUSIP, converted one-for-one
+npm run add:security -- --predecessor 512807108 --ticker LRCX --until 2024-10-03 \
+  --source <official record of the split> --split-ratio 10 --dry-run   # an earlier CUSIP, replaced in a split
 npm run add:security -- --conversion 82968B103 --ticker SIRI --ratio 0.1 --date 2024-09-09 \
   --description "Sirius XM's merger with Liberty Sirius XM Holdings" \
   --source <official record of the ratio> --dry-run               # shares received at another ratio
@@ -175,7 +177,8 @@ from a conversion at another ratio (Sirius XM's 2024 merger gave 0.8375 or 0.1 n
 comparable, so those are not linked. An investor that trades every quarter (BlackRock) rarely keeps a
 count unchanged; when the official record states one-for-one, add `--stated-one-for-one`, and every
 investor's value per share must instead stay within ×0.70 to ×1.45 across the conversion, as a share
-price does in a quarter (Sirius XM's old shares rose ×8.4, so they are still refused).
+price does in a quarter (Sirius XM's old shares rose ×8.4, so they are still refused). Investors that
+sold all their shares that quarter have no value per share to compare and are left out.
 
 Instead, `--conversion` records the ratio in `security_conversions`: holders of the converted CUSIP
 received that many shares of the stock per share on that date (Sirius XM's merger gave 0.1 new SIRI
@@ -194,13 +197,19 @@ reverse split). The CUSIP must identify the stock in the quarter before the spli
 the distribution date when the official record states only that (Old Dominion's 27 March 2024). In
 the quarter of the split, the stock's page shows "Stock split" with the shares the investor held
 afterwards, estimated from its holdings for the quarter before, and any difference as buying or
-selling. A split that also changed the CUSIP (Lam Research's in October 2024) needs the earlier CUSIP
-recorded first, then the split from that CUSIP.
+selling. A split that also changed the CUSIP (Lam Research's 10-for-1 on 3 October 2024 replaced
+512807108 with 512807306) needs the earlier CUSIP recorded first with `--predecessor` and
+`--split-ratio 10`, which compares share counts and value per share after adjusting for the split
+(within one share, since fractions are paid in cash), and then the split with `--split` from that
+earlier CUSIP. Honeywell's 1-for-2 reverse split on 29 June 2026 is not linked: the Aerospace spin-off
+on the same day kept its value per share level, so the data cannot confirm the split.
 
 A CUSIP identifies a stock from the earliest quarter our filings reported it when the stock was
 added. After older quarters are imported, `--extend-windows` moves each start date back to the
 earliest quarter now reported, with that filing as evidence, when the filers' names match the stock.
-Until then, stock pages show those quarters as "unclear" rather than as a zero.
+Until then, stock pages show those quarters as "unclear" rather than as a zero. When filers used a
+name from before a rename (Anthem, now Elevance Health), check the rename and that the CUSIP did not
+change, then add `--confirm-names <CUSIP>,…`.
 
 ## Checking the data
 
@@ -209,20 +218,25 @@ npm run check:data                    # read-only; uses the publishable key, whi
 npm run check:data -- --identities    # also re-checks every stock with OpenFIGI and SEC (about 2 minutes)
 ```
 
-Lists what a person should review:
+Lists what a person should review. Long lists show the 20 largest first, by the value filings
+reported:
 
 - **Freshness:** each investor's latest quarter against the latest quarter whose 13F deadline has
   passed (45 days after quarter end: 14 Feb, 15 May, 14 Aug and 14 Nov, or the next business day after
   a weekend or Presidents' Day; for 2026, 17 Feb, 15 May, 14 Aug and 16 Nov).
 - **Stock links:** likely earlier CUSIPs (a holding that ends as an investor's holding of a stock
-  starts with the same share count), mistyped CUSIPs, other CUSIPs under a stock's name (for example
-  a predecessor converted at another ratio, which needs a person), holdings outside their CUSIP's
-  recorded dates, and how much of each investor's latest value links to stock pages.
+  starts with the same share count, where nobody reports the old CUSIP afterwards and either the
+  names match or two investors carried over; with 20 investors, the same count also turns up by
+  chance), mistyped CUSIPs, other CUSIPs under a stock's name (for example a predecessor converted at
+  another ratio, which needs a person), holdings outside their CUSIP's recorded dates, and how much
+  of each investor's latest value links to stock pages.
 - **Values:** likely stock splits (labelled on stock pages), stock splits seen across all holders of
   a stock that are not yet recorded (record each from the company's announcement with `--split`),
-  value per share that differs between
-  investors for the same CUSIP and quarter or jumps more than fourfold between quarters (signs of a
-  mistyped value or a value in thousands), invalid CUSIP check digits and confidential omissions.
+  value per share that differs between investors for the same CUSIP and quarter by more than 10%
+  (filers' price sources differ by a few percent), value per share that jumps more than fourfold
+  between quarters while other holders saw no such move (small stocks can crash for every holder;
+  with no other holder, only a hundredfold jump counts, as a value in thousands is a thousandfold),
+  invalid CUSIP check digits not recorded as typos, and confidential omissions.
 - **Identities** (`--identities`): stocks whose CUSIP is no longer listed or now maps to another
   ticker, or whose ticker SEC no longer lists or lists elsewhere.
 

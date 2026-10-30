@@ -297,6 +297,25 @@ test("an earlier CUSIP is linked only when it was converted one-for-one, with an
   const traded = [{ investor: "blackrock", before: 335_000_000, after: 337_400_000, priceRatio: 1.06 }];
   assert.match(planPredecessor({ ...input, continuity: traded }).problems[0], /--stated-one-for-one/);
   assert.deepEqual(planPredecessor({ ...input, continuity: traded, statedOneForOne: true }).problems, []);
+  // A 10-for-1 split that also replaced the CUSIP (Lam Research, 3 October 2024): compared after the split.
+  const split = [
+    { investor: "tiger-global-management", before: 100_000, after: 1_000_000, priceRatio: 0.098 },
+    { investor: "state-street", before: 5_000_000, after: 50_400_000, priceRatio: 0.104 },
+  ];
+  assert.match(planPredecessor({ ...input, continuity: split }).problems[0], /No investor's share count carried over unchanged/);
+  assert.deepEqual(planPredecessor({ ...input, continuity: split, splitRatio: 10 }).problems, []);
+  assert.deepEqual(planPredecessor({ ...input, continuity: split.slice(1), splitRatio: 10 }).problems, []);
+  assert.match(planPredecessor({ ...input, continuity: split.slice(1), splitRatio: 4 }).problems[0],
+    /×0\.42 \(state-street\) across the conversion after adjusting for the split, outside what a split of 4 shares per share allows/);
+  assert.equal(planPredecessor({ ...input, continuity: split, splitRatio: 1 }).problems[0], "1 is not a split ratio (a positive number other than 1)");
+  // An investor that sold all its shares has no value per share to compare; the others decide.
+  const soldOut = { investor: "d-e-shaw", before: 2_000, after: 0, priceRatio: null };
+  assert.deepEqual(planPredecessor({ ...input, continuity: [...split, soldOut], splitRatio: 10 }).problems, []);
+  assert.match(planPredecessor({ ...input, continuity: [soldOut], splitRatio: 10 }).problems[0], /No investor held the stock after the conversion/);
+  // A 1-for-3 reverse split (DuPont, 24 June 2026): 1,000 shares became 333, the fraction paid in cash.
+  const reverse = [{ investor: "state-street", before: 1_000, after: 333, priceRatio: 0.5 }];
+  assert.deepEqual(planPredecessor({ ...input, continuity: reverse, splitRatio: 0.3333333333 }).problems, []);
+  assert.match(planPredecessor({ ...input, continuity: [{ ...reverse[0], after: 330 }], splitRatio: 0.3333333333 }).problems[0], /outside what a split/);
   assert.deepEqual(planPredecessor({ ...input, listed: { ticker: "LLYVA", name: "", securityType: "", marketSector: "", compositeFigi: "" } }).problems, [
     "531229748 is still listed (LLYVA); only a CUSIP that is no longer listed can be a predecessor",
   ]);

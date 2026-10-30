@@ -45,6 +45,16 @@ test("values are compared between investors and between quarters, and splits are
   assert.deepEqual(pairs.map((pair) => [pair.current.issuer, pair.splitRatio]), [["AMAZON COM INC", 20], ["APPLE INC", null]]);
   // A value reported in thousands instead of dollars moves value per share about a thousandfold.
   assert.deepEqual(priceJumps(pairs).map((pair) => pair.current.issuer), ["APPLE INC"]);
+  // A small stock that fell 90% for every holder moved in price; one holder alone falling 90% did not.
+  const crash = (investor: string, after: number) => [
+    position(investor, "2022-09-30", "000000001", "EXAMPLE BIO", 1000, 10_000), position(investor, "2022-12-31", "000000001", "EXAMPLE BIO", 1000, after),
+  ];
+  const holders = new Set(["brk|2022-09-30", "brk|2022-12-31", "blk|2022-09-30", "blk|2022-12-31"]);
+  assert.deepEqual(priceJumps(consecutivePairs([...crash("brk", 1000), ...crash("blk", 1000)], holders, previousQuarter)), []);
+  assert.deepEqual(priceJumps(consecutivePairs([...crash("brk", 1000), ...crash("blk", 9000)], holders, previousQuarter))
+    .map((pair) => pair.current.investorId), ["brk"]);
+  // Held by one investor only, a tenfold fall is not enough to tell from a price move.
+  assert.deepEqual(priceJumps(consecutivePairs(crash("brk", 1000), holders, previousQuarter)), []);
   // A 1-for-2 reverse split shows for both investors that held through it; one investor selling half does not.
   const reverse = (investor: string, shares: number) => [
     position(investor, "2026-03-31", "000000000", "EXAMPLE CO", shares, shares * 10),
@@ -55,6 +65,8 @@ test("values are compared between investors and between quarters, and splits are
   assert.deepEqual(consecutivePairs(reverse("brk", 1000), both, previousQuarter).map((pair) => pair.splitRatio), [null]);
   const sameQuarter = [position("brk", "2026-06-30", "037833100", "APPLE INC", 100, 20_500), position("blk", "2026-06-30", "037833100", "APPLE INC", 200, 41_100)];
   assert.deepEqual(priceDisagreements(sameQuarter), []);
+  // Filers' price sources differ by a few percent; that is not an error.
+  assert.deepEqual(priceDisagreements([sameQuarter[0], { ...sameQuarter[1], valueUsd: 43_000 }]), []);
   assert.equal(priceDisagreements([sameQuarter[0], { ...sameQuarter[1], valueUsd: 41 }]).length, 1);
 });
 
@@ -83,12 +95,22 @@ test("a holding that ends as a stock's holding starts with the same share count 
     position("brk", "2024-09-30", "829933100", "SIRIUS XM HOLDINGS INC", 105_155_029, 1),
   ];
   const reported = new Set(["brk|2024-06-30", "brk|2024-09-30", "brk|2025-06-30", "brk|2025-09-30", "brk|2025-12-31"]);
-  assert.deepEqual(likelyPredecessors(positions, [llyva, siri], reported, nextQuarter), [
-    { cusip: "531229748", securityId: "llyva", investorId: "brk", issuer: "LIBERTY MEDIA CORP DEL", lastPeriod: "2025-09-30", shares: 4_986_588 },
+  const named = (issuer: string) => issuer.startsWith("LIBERTY");
+  assert.deepEqual(likelyPredecessors(positions, [llyva, siri], reported, nextQuarter, named), [
+    { cusip: "531229748", securityId: "llyva", investorId: "brk", issuer: "LIBERTY MEDIA CORP DEL", lastPeriod: "2025-09-30", shares: 4_986_588, investors: 1 },
   ]);
   // Once linked, the earlier CUSIP is recorded and no longer listed.
   const linked = { securityId: "llyva", cusip: "531229748", validFrom: "2023-09-30", validTo: "2025-12-15" };
-  assert.deepEqual(likelyPredecessors(positions, [llyva, linked, siri], reported, nextQuarter), []);
+  assert.deepEqual(likelyPredecessors(positions, [llyva, linked, siri], reported, nextQuarter, named), []);
+  // By chance: one investor sold a fund and bought the same number of shares of an unrelated stock.
+  assert.deepEqual(likelyPredecessors(positions, [llyva, siri], reported, nextQuarter, () => false), []);
+  // Two investors carrying the same count over are evidence enough, without the stock's name.
+  const twice = [...positions, ...positions.slice(1, 3).map((row) => ({ ...row, investorId: "blk", shares: 1000 }))];
+  const both = new Set([...reported, "blk|2025-09-30", "blk|2025-12-31"]);
+  assert.deepEqual(likelyPredecessors(twice, [llyva, siri], both, nextQuarter, () => false).map((match) => match.investors), [2]);
+  // A CUSIP still reported afterwards, by any investor, was not replaced.
+  const stillReported = [...positions, position("blk", "2025-12-31", "531229748", "LIBERTY MEDIA CORP DEL", 10, 1)];
+  assert.deepEqual(likelyPredecessors(stillReported, [llyva, siri], new Set([...reported, "blk|2025-12-31"]), nextQuarter, named), []);
 });
 
 test("a split is seen across holders: price per share falls by the ratio while share counts rise by it", () => {

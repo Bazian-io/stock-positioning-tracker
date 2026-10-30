@@ -14,6 +14,7 @@ import {
 } from "./findings.mts";
 
 const usd = (value: number) => `$${(value / 1e9).toFixed(2)}B`;
+const LIST_LIMIT = 20;
 const quarter = (period: string) => `Q${Number(period.slice(5, 7)) / 3} ${period.slice(0, 4)}`;
 
 async function main() {
@@ -68,6 +69,17 @@ async function main() {
   const tickerOf = (securityId: string) => currentTicker(securityId)?.identifier_value ?? `security ${securityId}`;
   let review = 0;
   const section = (title: string) => console.log(`\n${title}`);
+  // Long lists show the largest first, by the total value filings reported, and stop after LIST_LIMIT.
+  const cusipValue = new Map<string, number>();
+  for (const position of positions) {
+    if (position.cusip && position.positionType === "long") cusipValue.set(position.cusip, (cusipValue.get(position.cusip) ?? 0) + position.valueUsd);
+  }
+  const valueOf = (cusip: string | null) => cusipValue.get(cusip ?? "") ?? 0;
+  const top = <T,>(items: T[], value: (item: T) => number) => [...items].sort((a, b) => value(b) - value(a)).slice(0, LIST_LIMIT);
+  const more = (items: unknown[]) => {
+    if (items.length > LIST_LIMIT) console.log(`    … and ${items.length - LIST_LIMIT} more`);
+  };
+  const stockName = (securityId: string) => securities.find((security) => security.id === securityId)?.issuer_name ?? "";
 
   console.log(`Data check (read-only), ${date}: ${investors.length} investors, ${quarters.length} quarters, ${positions.length} positions, `
     + `${securities.length} stocks`);
@@ -85,13 +97,18 @@ async function main() {
 
   section("Stock links");
   const reported = new Set(quarters.map((row) => `${row.investor_id}|${row.report_period}`));
-  const predecessors = likelyPredecessors(positions, cusips, reported, nextQuarter);
+  const predecessors = likelyPredecessors(positions, cusips, reported, nextQuarter,
+    (issuer, securityId) => sameCompany(issuer, stockName(securityId)));
   review += predecessors.length;
   console.log(`  Likely earlier CUSIPs, replaced one-for-one (share count carried over), shown as "reported, not held" until linked (${predecessors.length}):`);
-  for (const match of predecessors) {
-    console.log(`    ${tickerOf(match.securityId)}: ${match.cusip} "${match.issuer}", ${slug(match.investorId)} held ${match.shares.toLocaleString("en-US")} `
+  for (const match of top(predecessors, (item) => valueOf(item.cusip))) {
+    console.log(`    ${tickerOf(match.securityId)}: ${match.cusip} "${match.issuer}" (${usd(valueOf(match.cusip))} reported in all), `
+      + `${slug(match.investorId)}${match.investors > 1 ? ` and ${match.investors - 1} other(s)` : ""} held ${match.shares.toLocaleString("en-US")} `
       + `shares in ${quarter(match.lastPeriod)} and the same number of ${tickerOf(match.securityId)} in ${quarter(nextQuarter(match.lastPeriod))}`);
-    console.log(`      check an official record, then: npm run add:security -- --predecessor ${match.cusip} --ticker ${tickerOf(match.securityId)} `
+  }
+  more(predecessors);
+  if (predecessors.length > 0) {
+    console.log("      check an official record, then: npm run add:security -- --predecessor <CUSIP> --ticker <TICKER> "
       + "--until <conversion date> --source <record URL> --dry-run");
   }
   const linkedLater = new Set(predecessors.map((match) => `${match.cusip}|${match.securityId}`));
@@ -99,26 +116,37 @@ async function main() {
   const converted = new Set(conversions.map((row) => row.from_cusip));
   const nameMatches = suspectedTypos(positions, cusips, isValidCusip)
     .filter((match) => !linkedLater.has(`${match.cusip}|${match.securityId}`) && !converted.has(match.cusip));
-  const listMatches = (kind: string, title: string, hint: ((cusip: string, ticker: string) => string) | null) => {
+  const listMatches = (kind: string, title: string, hint: string | null) => {
     const matches = nameMatches.filter((match) => match.kind === kind);
     console.log(`  ${title} (${matches.length}):`);
-    for (const match of matches) {
-      console.log(`    ${tickerOf(match.securityId)}: ${match.cusip} "${match.issuer}", ${match.reportPeriods.map(quarter).join(", ")}`);
-      if (hint) console.log(`      ${hint(match.cusip, tickerOf(match.securityId))}`);
+    for (const match of top(matches, (item) => valueOf(item.cusip))) {
+      const periods = match.reportPeriods.length > 2
+        ? `${quarter(match.reportPeriods[0])} – ${quarter(match.reportPeriods.at(-1)!)} (${match.reportPeriods.length} quarters)`
+        : match.reportPeriods.map(quarter).join(", ");
+      console.log(`    ${tickerOf(match.securityId)}: ${match.cusip} "${match.issuer}" (${usd(valueOf(match.cusip))} reported in all), ${periods}`);
     }
+    more(matches);
+    if (hint && matches.length > 0) console.log(`      ${hint}`);
     return matches.length;
   };
   review += listMatches("typo", "Mistyped CUSIPs (invalid check digit), shown as \"reported, not held\" until recorded",
-    (cusip, ticker) => `check: npm run add:security -- --alias ${cusip} --ticker ${ticker} --dry-run`);
+    "check: npm run add:security -- --alias <CUSIP> --ticker <TICKER> --dry-run");
   review += listMatches("same-name", "Other CUSIPs under the stock's name: a predecessor before a reorganization, or a typo that passes the check digit",
-    (cusip, ticker) => `a typo: --alias ${cusip} --ticker ${ticker}; converted one-for-one: --predecessor ${cusip} --ticker ${ticker}; `
-      + "converted at another ratio: stays unlinked");
+    "a typo: --alias; converted one-for-one: --predecessor; a split that changed the CUSIP: --predecessor with --split-ratio, then the split; "
+      + "converted at another ratio: --conversion");
   listMatches("other-class", "Other CUSIPs of the same issuer: other classes or tracking stocks, or earlier CUSIPs converted at another ratio, for information", null);
   const outside = outsideWindows(positions, cusips);
   review += outside.length;
   console.log(`  Holdings under a recorded CUSIP outside its recorded dates (${outside.length}): shown as "unclear"`);
-  for (const position of outside.slice(0, 20)) console.log(`    ${slug(position.investorId)} ${quarter(position.reportPeriod)} ${position.cusip} ${position.issuer}`);
-  if (outside.length > 0) console.log("      check: npm run add:security -- --extend-windows --dry-run");
+  const outsideCusips = [...new Set(outside.map((position) => position.cusip ?? ""))];
+  for (const cusip of top(outsideCusips, (item) => outside.filter((position) => position.cusip === item).reduce((sum, position) => sum + position.valueUsd, 0))) {
+    const held = outside.filter((position) => position.cusip === cusip);
+    const periods = [...new Set(held.map((position) => position.reportPeriod))].sort();
+    console.log(`    ${cusip} ${held[0].issuer}: ${held.length} holding(s), ${quarter(periods[0])}${periods.length > 1 ? ` – ${quarter(periods.at(-1)!)}` : ""}, `
+      + usd(held.reduce((sum, position) => sum + position.valueUsd, 0)));
+  }
+  more(outsideCusips);
+  if (outside.length > 0) console.log("      check: npm run add:security -- --extend-windows --dry-run (a renamed company needs --confirm-names)");
   const longShares = (position: Position) => position.positionType === "long" && position.quantityType === "SH";
   const events = [...new Set(conversions.map((row) => `${row.security_id}|${row.effective_date}`))];
   console.log(`  Recorded conversions (${events.length}), shares received compared with the next reported holding, for information:`);
@@ -160,13 +188,14 @@ async function main() {
   const splitQuarters = marketSplits(positions, previousQuarter);
   const recordedSplit = (cusip: string, reportPeriod: string) => conversions.some((row) => row.from_cusip === cusip
     && row.effective_date > previousQuarter(reportPeriod) && row.effective_date <= reportPeriod);
-  const unrecorded = splitQuarters.filter((split) => !recordedSplit(split.cusip, split.reportPeriod));
+  // Only stocks with a page need a recorded split; warrants, units and funds have none.
+  const splitStock = (split: { cusip: string; reportPeriod: string }) => stockOf({ cusip: split.cusip, reportPeriod: split.reportPeriod } as Position, cusips);
+  const unrecorded = splitQuarters.filter((split) => splitStock(split) !== null && !recordedSplit(split.cusip, split.reportPeriod));
   review += unrecorded.length;
-  console.log(`  Stock splits seen across all holders, not yet recorded (${unrecorded.length}): shown as large changes until recorded`);
+  console.log(`  Stock splits seen across all holders of a stock, not yet recorded (${unrecorded.length}): shown as large changes until recorded`);
   for (const split of unrecorded) {
-    const securityId = stockOf({ cusip: split.cusip, reportPeriod: split.reportPeriod } as Position, cusips);
     const ratio = split.ratio >= 1 ? `${split.ratio}-for-1` : `1-for-${Math.round(1 / split.ratio)}`;
-    console.log(`    ${securityId ? tickerOf(securityId) : "(no stock)"} ${split.cusip} "${split.issuer}" ${quarter(split.reportPeriod)}: ${ratio} `
+    console.log(`    ${tickerOf(splitStock(split)!)} ${split.cusip} "${split.issuer}" ${quarter(split.reportPeriod)}: ${ratio} `
       + `(value per share ×${split.priceRatio.toFixed(3)}, shares ×${split.shareRatio.toFixed(2)}, ${split.holders} holder(s))`);
   }
   if (unrecorded.length > 0) {
@@ -176,19 +205,26 @@ async function main() {
   const split = new Set(splitQuarters.map((entry) => `${entry.cusip}|${entry.reportPeriod}`));
   const jumps = priceJumps(pairs).filter((pair) => !split.has(`${pair.current.cusip}|${pair.current.reportPeriod}`));
   review += jumps.length;
-  console.log(`  Value per share moving more than fourfold in a quarter, without a split pattern (${jumps.length}):`);
-  for (const { current, priceRatio } of jumps) {
-    console.log(`    ${slug(current.investorId)} ${current.issuer} ${quarter(current.reportPeriod)}: ×${priceRatio.toFixed(2)}`);
+  console.log(`  Value per share moving more than fourfold in a quarter, when other holders saw no such move, without a split pattern (${jumps.length}):`);
+  for (const { current, previous, priceRatio } of top(jumps, (pair) => Math.max(pair.current.valueUsd, pair.previous.valueUsd))) {
+    console.log(`    ${slug(current.investorId)} ${current.cusip} ${current.issuer} ${quarter(current.reportPeriod)}: ×${priceRatio.toFixed(2)} `
+      + `(${usd(previous.valueUsd)} → ${usd(current.valueUsd)})`);
   }
+  more(jumps);
   const disagreements = priceDisagreements(positions);
   review += disagreements.length;
-  console.log(`  Value per share differing between investors by more than 2% (${disagreements.length}):`);
-  for (const group of disagreements) {
-    console.log(`    ${group[0].cusip} ${quarter(group[0].reportPeriod)}: ${group.map((position) =>
+  console.log(`  Value per share differing between investors by more than 10% (${disagreements.length}):`);
+  for (const group of top(disagreements, (positions) => positions.reduce((sum, position) => sum + position.valueUsd, 0))) {
+    console.log(`    ${group[0].cusip} ${group[0].issuer} ${quarter(group[0].reportPeriod)}: ${group.map((position) =>
       `${slug(position.investorId)} $${(position.valueUsd / position.shares).toFixed(2)}`).join(", ")}`);
   }
-  const invalid = positions.filter((position) => position.positionType === "long" && position.cusip && !isValidCusip(position.cusip));
-  console.log(`  Long positions with an invalid CUSIP check digit: ${invalid.length} (${usd(invalid.reduce((sum, position) => sum + position.valueUsd, 0))})`);
+  more(disagreements);
+  // Recorded CUSIPs with a bad check digit are filers' typos already recorded with --alias.
+  const recordedCusips = new Set(cusips.map((record) => record.cusip));
+  const invalid = positions.filter((position) => position.positionType === "long" && position.cusip && !isValidCusip(position.cusip)
+    && !recordedCusips.has(position.cusip));
+  console.log(`  Long positions with an invalid CUSIP check digit, not recorded as a typo: ${invalid.length} `
+    + `(${usd(invalid.reduce((sum, position) => sum + position.valueUsd, 0))})`);
   const confidential = quarters.filter((row) => row.has_confidential_omissions);
   console.log(`  Quarters that omitted holdings under confidential treatment: ${confidential.length > 0
     ? confidential.map((row) => `${slug(row.investor_id)} ${quarter(row.report_period)}`).join(", ") : "none"}`);
