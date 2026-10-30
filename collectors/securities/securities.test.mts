@@ -56,6 +56,7 @@ const filings = {
   firstSourceUrl: "https://www.sec.gov/Archives/edgar/data/1067983/000095012321015518/0000950123-21-015518.txt",
   latestPeriod: "2026-06-30",
   reportedNames: ["APPLE INC COM"],
+  filers: 2,
 };
 const evidence = (cusip: string, ticker: string, figiTicker = ticker, name = "APPLE INC", securityType?: string): Evidence => ({
   cusip, ticker, figi: usListing(figi(figiTicker, name, securityType)), sec: secListing(secFile, ticker), listing: directory.get(ticker) ?? null, filings,
@@ -223,6 +224,7 @@ test("a mistyped CUSIP is recorded for a stock only for the quarters filers used
     firstSourceUrl: "https://www.sec.gov/Archives/edgar/data/1067983/000095012322002973/0000950123-22-002973.txt",
     latestPeriod: "2022-09-30",
     reportedNames: ["NU HLDGS LTD ORD SHS CL A"],
+    filers: 1,
   };
   const notFound = { warning: "No identifier found." };
   assert.deepEqual(planAlias("G6693N103", "Nu Holdings Ltd.", notFound, typo), {
@@ -243,7 +245,7 @@ test("a mistyped CUSIP is recorded for a stock only for the quarters filers used
 });
 
 test("a CUSIP's start date moves back only to an earlier filing that names the same company", () => {
-  const reported = { firstPeriod: "2024-06-30", firstSourceUrl: "https://www.sec.gov/x.txt", latestPeriod: "2026-06-30", reportedNames: ["NVIDIA CORPORATION COM"] };
+  const reported = { firstPeriod: "2024-06-30", firstSourceUrl: "https://www.sec.gov/x.txt", latestPeriod: "2026-06-30", reportedNames: ["NVIDIA CORPORATION COM"], filers: 3 };
   assert.deepEqual(planEarlierStart({ validFrom: "2026-06-30", recordedTimes: 1 }, "NVIDIA CORP", reported), {
     validFrom: "2024-06-30", sourceReference: "https://www.sec.gov/x.txt",
   });
@@ -278,6 +280,7 @@ test("an earlier CUSIP is linked only when it was converted one-for-one, with an
       firstSourceUrl: "https://www.sec.gov/Archives/edgar/data/1067983/x.txt",
       latestPeriod: "2025-09-30",
       reportedNames: ["LIBERTY MEDIA CORP DEL COM LBTY LIV S A"],
+      filers: 1,
     },
     until: "2025-12-15",
     source,
@@ -319,7 +322,18 @@ test("an earlier CUSIP is linked only when it was converted one-for-one, with an
   assert.deepEqual(planPredecessor({ ...input, listed: { ticker: "LLYVA", name: "", securityType: "", marketSector: "", compositeFigi: "" } }).problems, [
     "531229748 is still listed (LLYVA); only a CUSIP that is no longer listed can be a predecessor",
   ]);
-  assert.deepEqual(planPredecessor({ ...input, known: { warning: "No identifier found." } }).problems, ["OpenFIGI does not know 531229748 as a security"]);
+  assert.deepEqual(planPredecessor({ ...input, known: { warning: "No identifier found." } }).problems, [
+    "OpenFIGI does not know 531229748 as a security, and fewer than 3 investors reported it",
+  ]);
+  // OpenFIGI does not know every retired CUSIP; several investors reporting it show it is real.
+  const widely = { ...input.filings, filers: 3 };
+  assert.deepEqual(planPredecessor({ ...input, known: { warning: "No identifier found." }, filings: widely }).problems, []);
+  // A spin-off on the day of a 1-for-2 reverse split (Honeywell, 29 June 2026) kept value per share level:
+  // linked only when a person confirms the official record names the old and the new CUSIP.
+  const spinOff = [{ investor: "state-street", before: 31_726_805, after: 18_738_370, priceRatio: 0.99 }];
+  assert.match(planPredecessor({ ...input, continuity: spinOff, splitRatio: 0.5 }).problems[0], /outside what a split of 0.5 shares per share allows/);
+  assert.deepEqual(planPredecessor({ ...input, continuity: spinOff, splitRatio: 0.5, sourceNamesCusips: true }).problems, []);
+  assert.match(planPredecessor({ ...input, continuity: [soldOut], splitRatio: 0.5, sourceNamesCusips: true }).problems[0], /No investor held the stock/);
   assert.deepEqual(planPredecessor({ ...input, source: "liberty release" }).problems, [
     "The source must be the https address of an official record, such as the company's release or SEC filing",
   ]);
@@ -385,6 +399,12 @@ test("a stock split is recorded only for the stock's own CUSIP, when asked for",
   assert.deepEqual(planConversion({ ...input, fromIsStock: { before: true, during: false } }).problems, []);
   // A reverse split: 1 new share for each 10.
   assert.deepEqual(planConversion({ ...input, ratio: "0.1" }).problems, []);
+  // The stock's own CUSIP was checked when it was recorded, so OpenFIGI need not know it (Ginkgo's retired
+  // 37611X100); a CUSIP that is not the stock's still must be known.
+  const unknown = { warning: "No identifier found." };
+  assert.deepEqual(planConversion({ ...input, known: unknown }).problems, []);
+  assert.ok(planConversion({ ...input, known: unknown, fromIsStock: { before: false, during: false } }).problems
+    .includes("OpenFIGI does not know 67066G104 as a security"));
   assert.deepEqual(planConversion({ ...input, fromIsStock: { before: false, during: false } }).problems,
     ["67066G104 is not the stock's CUSIP in the quarter before 2024-06-10, so this is not a split of the stock"]);
   assert.deepEqual(planConversion({ ...input, ratio: "1" }).problems, ["A split's ratio cannot be 1"]);

@@ -200,8 +200,10 @@ async function addAlias(db: SupabaseClient, alias: string, ticker: string, dryRu
 // An earlier CUSIP of a stock, replaced one-for-one in a corporate action, recorded as a CUSIP of the
 // stock until the conversion date.
 // splitRatio: the old CUSIP was replaced in a stock split of that many shares per share.
+// sourceNamesCusips: a person has confirmed the official record names the old and the new CUSIP.
 async function addPredecessor(
-  db: SupabaseClient, cusip: string, ticker: string, until: string, source: string, statedOneForOne: boolean, splitRatio: number | undefined, dryRun: boolean,
+  db: SupabaseClient, cusip: string, ticker: string, until: string, source: string,
+  options: { statedOneForOne: boolean; splitRatio: number | undefined; sourceNamesCusips: boolean }, dryRun: boolean,
 ) {
   const [tickerRow] = await must<{ security_id: string }[]>(
     db.from("security_identifiers").select("security_id").eq("identifier_type", "ticker").eq("identifier_value", ticker)
@@ -265,10 +267,10 @@ async function addPredecessor(
   const listed = usListing(listedResult);
   console.log(`CUSIP ${cusip} as an earlier CUSIP of ${ticker} (${security.issuer_name}), until ${until}`);
   console.log(`  OpenFIGI: ${known.length > 0 ? `known as ${known[0].name}` : "not a known security"}${listed ? `, still listed as ${listed.ticker}` : ", no longer listed"}`);
-  console.log(`  Filings:  ${filings ? `reported ${filings.firstPeriod} to ${filings.latestPeriod} as ${filings.reportedNames.join("; ")}` : "none report this CUSIP"}`);
+  console.log(`  Filings:  ${filings ? `reported ${filings.firstPeriod} to ${filings.latestPeriod} by ${filings.filers} investor(s) as ${filings.reportedNames.join("; ")}` : "none report this CUSIP"}`);
   for (const row of continuity) {
     console.log(`  Shares:   ${row.investor} ${row.before} under ${cusip} in ${filings?.latestPeriod}, ${row.after} of ${ticker} in the next quarter`
-      + `${carriedOver(row, splitRatio) ? (splitRatio === undefined ? " (unchanged)" : " (exactly as split)") : ""}; `
+      + `${carriedOver(row, options.splitRatio) ? (options.splitRatio === undefined ? " (unchanged)" : " (exactly as split)") : ""}; `
       + `value per share ×${row.priceRatio?.toFixed(2) ?? "?"}`);
   }
   console.log(`  Source:   ${source}`);
@@ -283,8 +285,7 @@ async function addPredecessor(
     until,
     source,
     continuity,
-    statedOneForOne,
-    splitRatio,
+    ...options,
   });
   if (!identifier) throw new Error(`Not recording ${cusip}:\n- ${problems.join("\n- ")}`);
   console.log(`  cusip  ${cusip} for ${ticker}, from ${identifier.valid_from} until ${identifier.valid_to}`);
@@ -429,6 +430,7 @@ async function main() {
       "stated-one-for-one": { type: "boolean", default: false },
       split: { type: "boolean", default: false },
       "split-ratio": { type: "string" },
+      "source-names-cusips": { type: "boolean", default: false },
       "confirm-names": { type: "string" },
       "dry-run": { type: "boolean", default: false },
     },
@@ -436,7 +438,7 @@ async function main() {
   const usage = "Usage: npm run add:security -- --cusip <CUSIP> --ticker <TICKER> [--share-class <name>] [--dry-run]\n"
     + "       npm run add:security -- --investor <slug> [--top <count>] [--dry-run]\n"
     + "       npm run add:security -- --alias <mistyped CUSIP> --ticker <TICKER> [--dry-run]\n"
-    + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--stated-one-for-one | --split-ratio <shares per share>] [--dry-run]\n"
+    + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--stated-one-for-one | --split-ratio <shares per share>] [--source-names-cusips] [--dry-run]\n"
     + "       npm run add:security -- --conversion <CUSIP> --ticker <TICKER> --ratio <shares per share> --date <date> --description <text> --source <official URL> [--split] [--dry-run]\n"
     + "       npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]";
   const db = () => connect(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SECRET_KEY"));
@@ -454,7 +456,7 @@ async function main() {
   } else if (values.predecessor && values.ticker && values.until && values.source && !values.top) {
     const splitRatio = values["split-ratio"] === undefined ? undefined : Number(values["split-ratio"]);
     await addPredecessor(db(), values.predecessor.trim().toUpperCase(), normalizeTicker(values.ticker), values.until.trim(), values.source.trim(),
-      values["stated-one-for-one"], splitRatio, values["dry-run"]);
+      { statedOneForOne: values["stated-one-for-one"], splitRatio, sourceNamesCusips: values["source-names-cusips"] }, values["dry-run"]);
   } else if (values.conversion && values.ticker && values.ratio && values.date && values.description && values.source && !values.top) {
     await addConversion(db(), values.conversion.trim().toUpperCase(), normalizeTicker(values.ticker), {
       ratio: values.ratio.trim(), date: values.date.trim(), description: values.description, source: values.source.trim(), split: values.split,

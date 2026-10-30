@@ -72,11 +72,13 @@ export async function openFigi(cusips: string[], { includeUnlisted = false } = {
 // Where our filings report each CUSIP: the quarters, the names filers used, and the earliest filing as
 // evidence.
 export async function filingEvidence(db: SupabaseClient, cusips: string[]): Promise<Map<string, FilingEvidence>> {
-  type Row = { reported_cusip: string; report_period: string; reported_issuer: string; reported_class: string | null; filing_id: string };
+  type Row = {
+    reported_cusip: string; report_period: string; reported_issuer: string; reported_class: string | null; filing_id: string; investor_id: string;
+  };
   const rows: Row[] = [];
   for (let i = 0; i < cusips.length; i += EVIDENCE_BATCH) {
     rows.push(...await loadAll<Row>((from, to) => db.from("portfolio_holdings")
-      .select("reported_cusip, report_period, reported_issuer, reported_class, filing_id")
+      .select("reported_cusip, report_period, reported_issuer, reported_class, filing_id, investor_id")
       .in("reported_cusip", cusips.slice(i, i + EVIDENCE_BATCH))
       .order("report_period").order("filed_at").order("filing_id").order("source_row")
       .range(from, to), "Read holdings"));
@@ -96,6 +98,7 @@ export async function filingEvidence(db: SupabaseClient, cusips: string[]): Prom
       firstSourceUrl: sourceUrl,
       latestPeriod: reported[reported.length - 1].report_period,
       reportedNames: [...new Set(reported.map((row) => [row.reported_issuer, row.reported_class].filter(Boolean).join(" ")))],
+      filers: new Set(reported.map((row) => row.investor_id)).size,
     });
   }
   return evidence;

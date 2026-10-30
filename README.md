@@ -125,8 +125,8 @@ but repeats the whole report, so importing it would double count.
 Database totals: 20 investors, 394 filings, 430,587 holding rows, 145 MB. 4,621 stocks are
 identified: BlackRock's 500 largest positions and every listed stock the other investors reported,
 except ETFs, funds, warrants, units and CUSIPs that need a person (see
-[collectors/README.md](collectors/README.md#stocks)), with 44 official conversion ratios from
-corporate actions, 36 of them stock splits. No short-interest data yet.
+[collectors/README.md](collectors/README.md#stocks)), with 46 official conversion ratios from
+corporate actions, 38 of them stock splits. No short-interest data yet.
 
 ## Unfinished features
 
@@ -134,10 +134,9 @@ corporate actions, 36 of them stock splits. No short-interest data yet.
 - **BlackRock history.** BlackRock has one quarter; its earlier quarters are not imported (see
   Storage below).
 - **More stocks.** Delisted stocks and stocks whose CUSIP changed (such as Exxon Mobil's) have no
-  stock page yet; see `npm run add:security`. Some earlier CUSIPs are not linked yet, so those
-  stocks' pages start later: Honeywell (before its June 2026 reverse split), Canadian Pacific (before
-  April 2023), Ginkgo Bioworks (before its August 2024 reverse split), and smaller ones that
-  `npm run check:data` lists. Stock prices and short interest are not shown yet.
+  stock page yet; see `npm run add:security`. Some smaller stocks' earlier CUSIPs are not linked yet,
+  so their pages start later; `npm run check:data` lists them. Stock prices and short interest are
+  not shown yet.
 - **Automation.** Collection runs manually, one investor at a time. There is no investor list
   and no scheduled job (GitHub Actions is planned).
 

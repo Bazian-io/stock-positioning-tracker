@@ -178,7 +178,10 @@ export function sameCompany(a: string, b: string): boolean {
 
 // Where our filings report the CUSIP: the earliest quarter (with a filing as evidence) and the
 // names filers used for it.
-export type FilingEvidence = { firstPeriod: string; firstSourceUrl: string; latestPeriod: string; reportedNames: string[] };
+export type FilingEvidence = {
+  firstPeriod: string; firstSourceUrl: string; latestPeriod: string; reportedNames: string[];
+  filers: number; // Investors whose filings reported the CUSIP.
+};
 
 export type Evidence = {
   cusip: string;
@@ -343,6 +346,12 @@ export function carriedOver(row: Continuity, ratio = 1): boolean {
 // comparable. The exception is a stock split that also replaced the CUSIP (Lam Research's 10-for-1 on
 // 3 October 2024): with splitRatio, the official record states the split, and share counts and value per
 // share are compared after adjusting for it. Record the split itself from the old CUSIP afterwards.
+// OpenFIGI does not know every retired CUSIP (Canadian Pacific's 13645T100, replaced in April 2023);
+// several investors reporting it under the stock's name show it is a real security, not a typo.
+// Another event on the same day can move value per share too (Honeywell's Aerospace spin-off with its
+// 1-for-2 reverse split on 29 June 2026); when a person has confirmed the official record names both
+// the old and the new CUSIP (sourceNamesCusips), value per share is not compared.
+export const MIN_FILERS = 3;
 export function planPredecessor(input: {
   cusip: string;
   stockName: string;
@@ -355,14 +364,19 @@ export function planPredecessor(input: {
   continuity: Continuity[];
   statedOneForOne?: boolean; // The person confirms the official record states a one-for-one conversion.
   splitRatio?: number; // The person confirms the official record states a split of this many shares per share.
+  sourceNamesCusips?: boolean; // The person confirms the official record names the old and the new CUSIP.
 }): { identifier: PlannedIdentifier | null; problems: string[] } {
-  const { cusip, stockName, stockCusips, listed, known, filings, until, source, continuity, statedOneForOne = false, splitRatio } = input;
+  const {
+    cusip, stockName, stockCusips, listed, known, filings, until, source, continuity, statedOneForOne = false, splitRatio, sourceNamesCusips = false,
+  } = input;
   const problems: string[] = [];
   const ratio = splitRatio ?? 1;
   if (splitRatio !== undefined && !(splitRatio > 0 && splitRatio !== 1)) problems.push(`${splitRatio} is not a split ratio (a positive number other than 1)`);
   if (!isValidCusip(cusip)) problems.push(`${cusip} is not a valid CUSIP`);
   const record = (known as { data?: { name?: string }[] } | null)?.data ?? [];
-  if (record.length === 0) problems.push(`OpenFIGI does not know ${cusip} as a security`);
+  if (record.length === 0 && (filings?.filers ?? 0) < MIN_FILERS) {
+    problems.push(`OpenFIGI does not know ${cusip} as a security, and fewer than ${MIN_FILERS} investors reported it`);
+  }
   if (listed) problems.push(`${cusip} is still listed (${listed.ticker}); only a CUSIP that is no longer listed can be a predecessor`);
   if (!/^https:\/\/\S+$/.test(source)) problems.push("The source must be the https address of an official record, such as the company's release or SEC filing");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(until) || Number.isNaN(Date.parse(until))) problems.push(`${until} is not a date (YYYY-MM-DD)`);
@@ -388,7 +402,7 @@ export function planPredecessor(input: {
         + "If the official record states one-for-one, add --stated-one-for-one to check value per share instead");
     } else if (comparable.length === 0) {
       problems.push(`No investor held the stock after the conversion (${counts}), so value per share cannot be compared`);
-    } else if (!comparable.every(priced)) {
+    } else if (!sourceNamesCusips && !comparable.every(priced)) {
       problems.push(`Value per share changed by ${comparable.map((row) => `×${adjusted(row)!.toFixed(2)} (${row.investor})`).join(", ")} `
         + `across the conversion${splitRatio === undefined ? "" : ` after adjusting for the split`}, outside what a `
         + `${splitRatio === undefined ? "one-for-one conversion" : `split of ${splitRatio} shares per share`} allows (×0.70 to ×1.45)`);
@@ -423,7 +437,8 @@ export type PlannedConversion = {
 // pages can show the shares received. heldBefore: investors' shares of the converted security then.
 // A stock split (NVIDIA's 10-for-1 on 10 June 2024) converts the stock's own CUSIP, so it must be
 // asked for: split converts a CUSIP that identifies the stock in the quarter before; otherwise the
-// CUSIP must not identify the stock in either quarter.
+// CUSIP must not identify the stock in either quarter. A split's CUSIP was checked when it was
+// recorded for the stock, so OpenFIGI need not know it (Ginkgo's retired 37611X100).
 export function planConversion(input: {
   fromCusip: string;
   ratio: string;
@@ -439,7 +454,8 @@ export function planConversion(input: {
   const { fromCusip, ratio, effectiveDate, description, source, known, heldBefore, stockIdentified, fromIsStock, split } = input;
   const problems: string[] = [];
   if (!isValidCusip(fromCusip)) problems.push(`${fromCusip} is not a valid CUSIP`);
-  if (((known as { data?: unknown[] } | null)?.data ?? []).length === 0) problems.push(`OpenFIGI does not know ${fromCusip} as a security`);
+  const recordedSplit = split && fromIsStock.before;
+  if (((known as { data?: unknown[] } | null)?.data ?? []).length === 0 && !recordedSplit) problems.push(`OpenFIGI does not know ${fromCusip} as a security`);
   if (!/^\d+(\.\d+)?$/.test(ratio) || !(Number(ratio) > 0)) problems.push(`${ratio} is not a positive number of shares per share`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) || Number.isNaN(Date.parse(effectiveDate))) problems.push(`${effectiveDate} is not a date (YYYY-MM-DD)`);
   if (description.trim() === "") problems.push("The description is empty");

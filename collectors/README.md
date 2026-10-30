@@ -171,7 +171,9 @@ redeemed one-for-one for Liberty Live Holdings shares on 15 December 2025, so LL
 Q4 2025 with a "new position". `--predecessor` records the earlier CUSIP as a CUSIP of the stock from
 the earliest quarter our filings report it until the conversion date (`--until`), with the official
 record (`--source`, a company release or SEC filing) as evidence. It refuses a CUSIP that is still
-listed or unknown to OpenFIGI, one whose dates would overlap the stock's other CUSIPs, names that do
+listed, or unknown to OpenFIGI and reported by fewer than 3 investors (OpenFIGI does not know every
+retired CUSIP, such as Canadian Pacific's 13645T100; several filers reporting it under the stock's
+name show it is real, not a typo), one whose dates would overlap the stock's other CUSIPs, names that do
 not match, and any conversion where no investor's share count carried over unchanged: share counts
 from a conversion at another ratio (Sirius XM's 2024 merger gave 0.8375 or 0.1 new shares) are not
 comparable, so those are not linked. An investor that trades every quarter (BlackRock) rarely keeps a
@@ -201,8 +203,11 @@ selling. A split that also changed the CUSIP (Lam Research's 10-for-1 on 3 Octob
 512807108 with 512807306) needs the earlier CUSIP recorded first with `--predecessor` and
 `--split-ratio 10`, which compares share counts and value per share after adjusting for the split
 (within one share, since fractions are paid in cash), and then the split with `--split` from that
-earlier CUSIP. Honeywell's 1-for-2 reverse split on 29 June 2026 is not linked: the Aerospace spin-off
-on the same day kept its value per share level, so the data cannot confirm the split.
+earlier CUSIP (whose earlier check stands in for OpenFIGI's). Another event on the same day can
+move value per share too: Honeywell's Aerospace spin-off came just before its 1-for-2 reverse split
+on 29 June 2026, so value per share stayed level. When the official record names both the old and
+the new CUSIP (Nasdaq's corporate action alert did for Honeywell), add `--source-names-cusips`, and
+value per share is not compared; names, dates and the other checks still apply.
 
 A CUSIP identifies a stock from the earliest quarter our filings reported it when the stock was
 added. After older quarters are imported, `--extend-windows` moves each start date back to the
