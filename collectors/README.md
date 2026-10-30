@@ -151,6 +151,9 @@ npm run add:security -- --predecessor 531229748 --ticker LLYVA --until 2025-12-1
 npm run add:security -- --conversion 82968B103 --ticker SIRI --ratio 0.1 --date 2024-09-09 \
   --description "Sirius XM's merger with Liberty Sirius XM Holdings" \
   --source <official record of the ratio> --dry-run               # shares received at another ratio
+npm run add:security -- --conversion 67066G104 --ticker NVDA --ratio 10 --date 2024-06-10 \
+  --description "NVIDIA's 10-for-1 stock split" \
+  --source <official record of the split> --split --dry-run       # a stock split
 npm run add:security -- --extend-windows --dry-run                # after importing older quarters
 ```
 
@@ -184,6 +187,16 @@ and reported by our filings for the quarter before, the stock must have a CUSIP 
 the conversion, and the source must be an official record stating the ratio. Holdings are not
 changed or adjusted.
 
+A stock split converts the stock's own shares, so it is recorded with `--split` and the stock's own
+CUSIP: each share became `--ratio` shares (10 for NVIDIA's 10-for-1 split, 0.1 for a 1-for-10
+reverse split). The CUSIP must identify the stock in the quarter before the split, and without
+`--split` the stock's own CUSIP is refused. The date is the first day of split-adjusted trading, or
+the distribution date when the official record states only that (Old Dominion's 27 March 2024). In
+the quarter of the split, the stock's page shows "Stock split" with the shares the investor held
+afterwards, estimated from its holdings for the quarter before, and any difference as buying or
+selling. A split that also changed the CUSIP (Lam Research's in October 2024) needs the earlier CUSIP
+recorded first, then the split from that CUSIP.
+
 A CUSIP identifies a stock from the earliest quarter our filings reported it when the stock was
 added. After older quarters are imported, `--extend-windows` moves each start date back to the
 earliest quarter now reported, with that filing as evidence, when the filers' names match the stock.
@@ -205,7 +218,9 @@ Lists what a person should review:
   starts with the same share count), mistyped CUSIPs, other CUSIPs under a stock's name (for example
   a predecessor converted at another ratio, which needs a person), holdings outside their CUSIP's
   recorded dates, and how much of each investor's latest value links to stock pages.
-- **Values:** likely stock splits (labelled on stock pages), value per share that differs between
+- **Values:** likely stock splits (labelled on stock pages), stock splits seen across all holders of
+  a stock that are not yet recorded (record each from the company's announcement with `--split`),
+  value per share that differs between
   investors for the same CUSIP and quarter or jumps more than fourfold between quarters (signs of a
   mistyped value or a value in thousands), invalid CUSIP check digits and confidential omissions.
 - **Identities** (`--identities`): stocks whose CUSIP is no longer listed or now maps to another
@@ -217,7 +232,8 @@ Lists what a person should review:
 2. Import, for example the new quarter after each filing deadline, and re-run the previous two or
    three quarters to pick up late amendments.
 3. Run `npm run check:data` and resolve what it lists: `--extend-windows`, `--alias`,
-   `--predecessor` and `--conversion` for stock links, and the SEC filing itself for value questions.
+   `--predecessor` and `--conversion` (with `--split` for splits) for stock links, and the SEC filing
+   itself for value questions.
 4. Each quarter, run `npm run check:data -- --identities` for ticker and CUSIP changes.
 
 ### Other notes

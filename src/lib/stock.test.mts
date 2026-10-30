@@ -123,3 +123,20 @@ test("shares received in a corporate action are told apart from buying, using th
   const fromQ2 = receivedInQuarter(live, new Map([["531229607", 43_208_291], ["531229854", 7_722_451]]), "2023-09-30");
   assert.equal(Math.round(fromQ2?.shares ?? 0), 11_132_594); // Berkshire reported 11,132,590: fractions were paid in cash.
 });
+
+test("a recorded stock split replaces the shares held, so only buying or selling beyond it is a change", () => {
+  // NVIDIA's 10-for-1 split, split-adjusted trading from 10 June 2024: 1,000,000 shares held at Q1 2024 became 10,000,000.
+  const split: Conversion[] = [{ fromCusip: "67066G104", sharesPerShare: 10, effectiveDate: "2024-06-10", description: "NVIDIA's 10-for-1 stock split" }];
+  const received = receivedInQuarter(split, new Map([["67066G104", 1_000_000]]), "2024-06-30", ["67066G104"]);
+  assert.deepEqual(received, { shares: 10_000_000, effectiveDate: "2024-06-10", description: "NVIDIA's 10-for-1 stock split", ownShares: 1_000_000 });
+  const series = holdingSeries(
+    ["2024-03-31", "2024-06-30"],
+    new Map([["2024-03-31", { confidentialOmissions: false }], ["2024-06-30", { confidentialOmissions: false }]]),
+    new Map([["2024-03-31", { shares: 1_000_000, valueUsd: 9e8 }], ["2024-06-30", { shares: 10_500_000, valueUsd: 1.3e9 }]]),
+    new Map(),
+    new Map(received ? [["2024-06-30", received]] : []),
+  );
+  const change = quarterChange(series[1], series[0]);
+  assert.equal(change.kind, "received");
+  assert.equal(change.shares, 500_000); // Bought beyond the split, not "+9,500,000".
+});

@@ -12,7 +12,7 @@ They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 | `investor_ciks` | Every CIK an investor has filed under, e.g. before and after a reorganization; each CIK belongs to one investor, optionally only from a given quarter (`first_report_period`). |
 | `securities` | Stable internal identities for security/share classes and the short-interest watchlist flag. |
 | `security_identifiers` | Verified CUSIP, ticker, FIGI and provider-symbol mappings with validity periods. |
-| `security_conversions` | Official ratios from corporate actions: holders of one CUSIP received shares of a stock (Sirius XM's 2024 merger: 0.1 new share per old share). Holdings are not adjusted. |
+| `security_conversions` | Official ratios from corporate actions: holders of one CUSIP received shares of a stock (Sirius XM's 2024 merger: 0.1 new share per old share), including stock splits from the stock's own CUSIP (NVIDIA's 2024 split: 10 per share). Holdings are not adjusted. |
 | `filings` | SEC filing metadata, amendment links, source evidence, summary totals and validation state. |
 | `holdings` | Every source row, including unmapped securities and separate option positions. |
 | `short_interest` | Dated observations and their correction history, separated by provider. |

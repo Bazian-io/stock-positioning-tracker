@@ -23,8 +23,10 @@ export type QuarterHolding = {
 export type Conversion = { fromCusip: string; sharesPerShare: number; effectiveDate: string; description: string };
 
 // Shares received in conversions during a quarter, estimated from the investor's holdings reported for
-// the quarter before; it may have traded between that quarter end and the conversion.
-export type Received = { shares: number; effectiveDate: string; description: string };
+// the quarter before; it may have traded between that quarter end and the conversion. ownShares: shares
+// of the stock itself that were converted, as in a stock split (NVIDIA's 10-for-1); they are replaced by
+// the shares received, not added to them.
+export type Received = { shares: number; effectiveDate: string; description: string; ownShares: number };
 
 // Shares reported under a CUSIP that is not confirmed to identify the stock in that quarter.
 export type Unconfirmed = { cusip: string; shares: number };
@@ -81,15 +83,23 @@ export function identifiesStock(cusips: CusipPeriod[], cusip: string | null, rep
 
 // Shares of the stock received in conversions that took effect during the quarter ending reportPeriod,
 // from the investor's shares of each converted security (CUSIP → shares) reported for the quarter before.
-export function receivedInQuarter(conversions: Conversion[], heldBefore: Map<string, number>, reportPeriod: string): Received | null {
+// ownCusips: the stock's own CUSIPs in the quarter before, whose conversion is a split.
+export function receivedInQuarter(
+  conversions: Conversion[],
+  heldBefore: Map<string, number>,
+  reportPeriod: string,
+  ownCusips: string[] = [],
+): Received | null {
   const start = previousQuarter(reportPeriod);
   const due = conversions.filter((conversion) => conversion.effectiveDate > start && conversion.effectiveDate <= reportPeriod
     && (heldBefore.get(conversion.fromCusip) ?? 0) > 0);
   if (due.length === 0) return null;
+  const held = (conversion: Conversion) => heldBefore.get(conversion.fromCusip) ?? 0;
   return {
-    shares: due.reduce((sum, conversion) => sum + (heldBefore.get(conversion.fromCusip) ?? 0) * conversion.sharesPerShare, 0),
+    shares: due.reduce((sum, conversion) => sum + held(conversion) * conversion.sharesPerShare, 0),
     effectiveDate: due[0].effectiveDate,
     description: due[0].description,
+    ownShares: due.filter((conversion) => ownCusips.includes(conversion.fromCusip)).reduce((sum, conversion) => sum + held(conversion), 0),
   };
 }
 
@@ -158,8 +168,9 @@ export function quarterChange(current: QuarterHolding, previous: QuarterHolding 
   if (!previous || previous.reportPeriod !== previousPeriod || previous.state === "no-report") return notComparable(previousPeriod, "no-report");
   if (previous.state === "unclear") return notComparable(previousPeriod, "unclear");
   if (current.received) {
-    // Received in a corporate action: the change beyond the shares received.
-    const beyond = current.shares - previous.shares - current.received.shares;
+    // Received in a corporate action: the change beyond the shares received. Shares of the stock itself
+    // that were converted (a split) are replaced by what they became.
+    const beyond = current.shares - (previous.shares - current.received.ownShares) - current.received.shares;
     return { kind: "received", previousPeriod, shares: beyond, fraction: null, splitRatio: null, received: current.received, blocker: null };
   }
   const shares = current.shares - previous.shares;

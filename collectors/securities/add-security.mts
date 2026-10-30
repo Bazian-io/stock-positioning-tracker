@@ -8,6 +8,7 @@
 //        npm run add:security -- --alias G6693N103 --ticker NU [--dry-run]
 //        npm run add:security -- --predecessor 531229748 --ticker LLYVA --until 2025-12-15 --source <official URL> [--dry-run]
 //        npm run add:security -- --conversion 82968B103 --ticker SIRI --ratio 0.1 --date 2024-09-09 --description <text> --source <official URL> [--dry-run]
+//        npm run add:security -- --conversion 67066G104 --ticker NVDA --ratio 10 --date 2024-06-10 --description <text> --source <official URL> --split [--dry-run]
 //        npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]
 import { parseArgs } from "node:util";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -290,12 +291,13 @@ async function addPredecessor(db: SupabaseClient, cusip: string, ticker: string,
   console.log(`Recorded ${cusip} as an earlier CUSIP of ${ticker}.`);
 }
 
-// A corporate action's ratio: holders of fromCusip received ratio shares of the stock on the date.
+// A corporate action's ratio: holders of fromCusip received ratio shares of the stock on the date. For a
+// stock split (split), fromCusip is the stock's own CUSIP and each share became ratio shares.
 async function addConversion(
   db: SupabaseClient,
   fromCusip: string,
   ticker: string,
-  values: { ratio: string; date: string; description: string; source: string },
+  values: { ratio: string; date: string; description: string; source: string; split: boolean },
   dryRun: boolean,
 ) {
   const [tickerRow] = await must<{ security_id: string }[]>(
@@ -322,7 +324,9 @@ async function addConversion(
     must<{ id: string; slug: string }[]>(db.from("investors").select("id, slug"), "Read investors"),
     openFigi([fromCusip], { includeUnlisted: true }),
   ]);
-  const covering = stockCusips.filter((row) => row.valid_from <= quarterEnd && (row.valid_to === null || quarterEnd < row.valid_to)).map((row) => row.identifier_value);
+  const coveringAt = (period: string) => stockCusips.filter((row) => row.valid_from <= period && (row.valid_to === null || period < row.valid_to))
+    .map((row) => row.identifier_value);
+  const covering = coveringAt(quarterEnd);
   const positions = await must<{ investor_id: string; report_period: string; reported_cusip: string; quantity: string }[]>(
     db.from("portfolio_positions").select("investor_id, report_period, reported_cusip, quantity::text")
       .in("reported_cusip", [fromCusip, ...covering]).in("report_period", [before, quarterEnd]).eq("position_type", "long").eq("quantity_type", "SH"),
@@ -335,10 +339,11 @@ async function addConversion(
     .map((investorId) => ({ investorId, investor: investors.find((row) => row.id === investorId)?.slug ?? investorId, shares: shares(investorId, before, [fromCusip]) }));
 
   const known = (knownResult as { data?: { name?: string }[] } | null)?.data ?? [];
-  console.log(`Conversion of ${fromCusip} into ${ticker}: ${values.ratio} shares per share on ${values.date} (${values.description})`);
+  console.log(`${values.split ? "Stock split" : "Conversion"} of ${fromCusip} into ${ticker}: ${values.ratio} shares per share on ${values.date} (${values.description})`);
   console.log(`  OpenFIGI: ${known.length > 0 ? `known as ${known[0].name}` : "not a known security"}`);
   for (const row of heldBefore) {
-    console.log(`  Shares:   ${row.investor} held ${row.shares} of ${fromCusip} in ${before}, so received about ${Math.round(row.shares * Number(values.ratio))}; `
+    console.log(`  Shares:   ${row.investor} held ${row.shares} of ${fromCusip} in ${before}, so ${values.split ? "held" : "received"} about `
+      + `${Math.round(row.shares * Number(values.ratio))}${values.split ? " after the split" : ""}; `
       + `it reported ${shares(row.investorId, quarterEnd, covering)} of ${ticker} in ${quarterEnd}, including any other conversions and trades`);
   }
   console.log(`  Source:   ${values.source}`);
@@ -352,7 +357,8 @@ async function addConversion(
     known: knownResult,
     heldBefore,
     stockIdentified: covering.length > 0,
-    fromIsStock: covering.includes(fromCusip),
+    fromIsStock: { before: coveringAt(before).includes(fromCusip), during: covering.includes(fromCusip) },
+    split: values.split,
   });
   if (!conversion) throw new Error(`Not recording the conversion:\n- ${problems.join("\n- ")}`);
   if (dryRun) {
@@ -360,7 +366,7 @@ async function addConversion(
     return;
   }
   await must(db.from("security_conversions").insert({ ...conversion, security_id: tickerRow.security_id }), "Add conversion");
-  console.log(`Recorded the conversion of ${fromCusip} into ${ticker}.`);
+  console.log(`Recorded the ${values.split ? "stock split" : "conversion"} of ${fromCusip} into ${ticker}.`);
 }
 
 // Moves recorded CUSIPs' start dates back to the earliest quarter our filings report them, after older
@@ -416,6 +422,7 @@ async function main() {
       description: { type: "string" },
       "extend-windows": { type: "boolean", default: false },
       "stated-one-for-one": { type: "boolean", default: false },
+      split: { type: "boolean", default: false },
       "confirm-names": { type: "string" },
       "dry-run": { type: "boolean", default: false },
     },
@@ -424,7 +431,7 @@ async function main() {
     + "       npm run add:security -- --investor <slug> [--top <count>] [--dry-run]\n"
     + "       npm run add:security -- --alias <mistyped CUSIP> --ticker <TICKER> [--dry-run]\n"
     + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--stated-one-for-one] [--dry-run]\n"
-    + "       npm run add:security -- --conversion <CUSIP> --ticker <TICKER> --ratio <shares per share> --date <date> --description <text> --source <official URL> [--dry-run]\n"
+    + "       npm run add:security -- --conversion <CUSIP> --ticker <TICKER> --ratio <shares per share> --date <date> --description <text> --source <official URL> [--split] [--dry-run]\n"
     + "       npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]";
   const db = () => connect(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SECRET_KEY"));
   const modes = [values.investor, values.cusip, values.alias, values.predecessor, values.conversion, values["extend-windows"] || undefined]
@@ -443,7 +450,7 @@ async function main() {
       values["stated-one-for-one"], values["dry-run"]);
   } else if (values.conversion && values.ticker && values.ratio && values.date && values.description && values.source && !values.top) {
     await addConversion(db(), values.conversion.trim().toUpperCase(), normalizeTicker(values.ticker), {
-      ratio: values.ratio.trim(), date: values.date.trim(), description: values.description, source: values.source.trim(),
+      ratio: values.ratio.trim(), date: values.date.trim(), description: values.description, source: values.source.trim(), split: values.split,
     }, values["dry-run"]);
   } else if (values["extend-windows"] && !values.ticker && !values.top) {
     const confirmed = (values["confirm-names"] ?? "").split(",").map((cusip) => cusip.trim().toUpperCase()).filter(Boolean);

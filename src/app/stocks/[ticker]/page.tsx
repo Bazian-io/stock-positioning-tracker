@@ -9,9 +9,8 @@ import {
   quarterParts,
 } from "@/lib/portfolio";
 import {
-  EXCHANGE_NAMES, exactShareRatio, holdingSeries, lastQuarterBefore, previousQuarter, quarterChange, receivedInQuarter, type Change,
-  type QuarterHolding,
-  type Received, type Unconfirmed,
+  EXCHANGE_NAMES, exactShareRatio, holdingSeries, identifiesStock, lastQuarterBefore, previousQuarter, quarterChange, receivedInQuarter,
+  type Change, type QuarterHolding, type Received, type Unconfirmed,
 } from "@/lib/stock";
 import { getStock, getStockOwnership, type StockPosition } from "@/lib/stock-data";
 
@@ -36,9 +35,11 @@ function splitLabel(ratio: number): string {
   return ratio >= 1 ? `${formatNumber(ratio)}-for-1` : `1-for-${formatNumber(Math.round(1 / ratio))}`;
 }
 
-// "About 101,380,356 shares from Sirius XM's merger … on Sep 9, 2024, based on Q2 2024 holdings; +3,774,673 more than that".
+// "About 101,380,356 shares from Sirius XM's merger … on Sep 9, 2024, based on Q2 2024 holdings; +3,774,673 more than that",
+// or for a split "About 10,000,000 shares after NVIDIA's 10-for-1 stock split on Jun 10, 2024, …".
 function receivedNote(received: Received, change?: Change): string {
-  const note = `About ${formatNumber(Math.round(received.shares))} shares from ${received.description} on ${formatDate(received.effectiveDate)}`;
+  const note = `About ${formatNumber(Math.round(received.shares))} shares ${received.ownShares > 0 ? "after" : "from"} ${received.description} `
+    + `on ${formatDate(received.effectiveDate)}`;
   if (!change) return note;
   // Fractions of shares are paid in cash, so a difference of a few shares is not a trade.
   const beyond = Math.round(change.shares);
@@ -59,7 +60,10 @@ function describeChange(change: Change): { label: string; detail?: string } {
     case "unchanged":
       return { label: "Unchanged" };
     case "received":
-      return { label: "Received in corporate action", detail: change.received ? receivedNote(change.received, change) : undefined };
+      return {
+        label: change.received && change.received.ownShares > 0 ? "Stock split" : "Received in corporate action",
+        detail: change.received ? receivedNote(change.received, change) : undefined,
+      };
     case "split":
       return {
         label: "Likely stock split",
@@ -141,7 +145,9 @@ export default async function StockPage({ params, searchParams }: StockPageProps
       for (const position of convertedFrom.filter(longShares).filter((row) => row.reportPeriod === previousQuarter(quarter))) {
         heldBefore.set(position.cusip, (heldBefore.get(position.cusip) ?? 0) + position.shares);
       }
-      const receivedThen = receivedInQuarter(conversions, heldBefore, quarter);
+      // The stock's own CUSIPs in the quarter before: converting those is a split.
+      const ownCusips = stock.cusips.filter((period) => identifiesStock(stock.cusips, period.cusip, previousQuarter(quarter))).map((period) => period.cusip);
+      const receivedThen = receivedInQuarter(conversions, heldBefore, quarter, ownCusips);
       if (receivedThen) received.set(quarter, receivedThen);
     }
     const reported = new Map(reports.filter((report) => report.investorId === investor.id).map((report) => [report.reportPeriod, report]));
@@ -210,7 +216,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
           `${quarter} reported shares`,
           `${formatUsdCompact(holding.valueUsd)} reported value`,
           ...(splitRatio !== null ? [`Likely ${splitLabel(splitRatio)} stock split`] : []),
-          ...(holding.received ? [`Received in corporate action: ${receivedNote(holding.received)}`] : []),
+          ...(holding.received ? [`${holding.received.ownShares > 0 ? "Stock split" : "Received in corporate action"}: ${receivedNote(holding.received)}`] : []),
         ]
         : holding.state === "not-held"
           ? [`${quarter}: reported, not held`]
@@ -465,6 +471,11 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                   &ldquo;Received in corporate action&rdquo; marks shares received when other shares the investor held were
                   converted or reclassified, such as in a merger, at the official ratio and based on its holdings reported for
                   the quarter before. Any difference is buying or selling around that date, or fractions paid in cash.
+                </li>
+                <li>
+                  &ldquo;Stock split&rdquo; marks a split recorded from the company&apos;s official announcement: the shares
+                  held before it, at the official ratio, became the shares shown, so only buying or selling beyond that is a
+                  change.
                 </li>
                 <li>
                   &ldquo;Likely stock split&rdquo; marks a change by an exact whole-number ratio, such as 20 times the shares,

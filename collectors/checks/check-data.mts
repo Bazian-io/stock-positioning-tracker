@@ -9,7 +9,7 @@ import { lastQuarterBefore, nextQuarter, previousQuarter } from "../../src/lib/s
 import { isValidCusip, LISTING_MICS, LISTING_NAMES, sameCompany, secListing, usListing } from "../securities/identify.mts";
 import { listings, loadAll, openFigi, requireEnv, secTickers, today } from "../securities/sources.mts";
 import {
-  consecutivePairs, latestDueQuarter, likelyPredecessors, outsideWindows, priceDisagreements, priceJumps, stockOf, suspectedTypos,
+  consecutivePairs, latestDueQuarter, likelyPredecessors, marketSplits, outsideWindows, priceDisagreements, priceJumps, stockOf, suspectedTypos,
   type CusipRecord, type Position,
 } from "./findings.mts";
 
@@ -22,17 +22,14 @@ async function main() {
   if (key.startsWith("sb_secret_")) throw new Error("SUPABASE_PUBLISHABLE_KEY holds a secret key; this check reads with the publishable key only");
   const db = createClient(requireEnv("SUPABASE_URL"), key, { auth: { persistSession: false, autoRefreshToken: false } });
 
-  const [investors, quarters, positionRows, identifiers, securities, conversions] = await Promise.all([
+  type PositionRow = {
+    investor_id: string; report_period: string; reported_cusip: string | null; reported_issuer: string; position_type: string;
+    quantity_type: string; quantity: string; value_usd: string;
+  };
+  const [investors, quarters, identifiers, securities, conversions] = await Promise.all([
     loadAll<{ id: string; slug: string }>((from, to) => db.from("investors").select("id, slug").order("slug").range(from, to), "Read investors"),
     loadAll<{ investor_id: string; report_period: string; has_confidential_omissions: boolean }>((from, to) => db.from("quarterly_portfolios")
       .select("investor_id, report_period, has_confidential_omissions").order("investor_id").order("report_period").range(from, to), "Read quarters"),
-    loadAll<{
-      investor_id: string; report_period: string; reported_cusip: string | null; reported_issuer: string; position_type: string;
-      quantity_type: string; quantity: string; value_usd: string;
-    }>((from, to) => db.from("portfolio_positions")
-      .select("investor_id, report_period, reported_cusip, reported_issuer, position_type, quantity_type, quantity::text, value_usd::text")
-      .order("investor_id").order("report_period").order("reported_cusip").order("reported_issuer").order("position_type").order("quantity_type")
-      .range(from, to), "Read positions"),
     loadAll<{ security_id: string; identifier_type: string; identifier_value: string; namespace: string; valid_from: string; valid_to: string | null }>(
       (from, to) => db.from("security_identifiers").select("security_id, identifier_type, identifier_value, namespace, valid_from, valid_to")
         .in("identifier_type", ["cusip", "ticker"]).order("id").range(from, to), "Read identifiers"),
@@ -41,6 +38,17 @@ async function main() {
       .from("security_conversions").select("security_id, from_cusip, shares_per_share::text, effective_date, description")
       .order("effective_date").order("security_id").order("from_cusip").range(from, to), "Read conversions"),
   ]);
+  // Positions one investor-quarter at a time, a few at once: paging through every position in one list
+  // reaches offsets the database cannot sort in time.
+  const positionRows: PositionRow[] = [];
+  for (let i = 0; i < quarters.length; i += 8) {
+    const pages = await Promise.all(quarters.slice(i, i + 8).map((quarter) => loadAll<PositionRow>((from, to) => db.from("portfolio_positions")
+      .select("investor_id, report_period, reported_cusip, reported_issuer, position_type, quantity_type, quantity::text, value_usd::text")
+      .eq("investor_id", quarter.investor_id).eq("report_period", quarter.report_period)
+      .order("reported_cusip").order("reported_issuer").order("position_type").order("quantity_type")
+      .range(from, to), "Read positions")));
+    positionRows.push(...pages.flat());
+  }
   const slug = (investorId: string) => investors.find((investor) => investor.id === investorId)?.slug ?? investorId;
   const positions: Position[] = positionRows.map((row) => ({
     investorId: row.investor_id,
@@ -148,7 +156,25 @@ async function main() {
   for (const { current, splitRatio } of splits) {
     console.log(`    ${slug(current.investorId)} ${current.issuer} ${quarter(current.reportPeriod)}: shares ×${splitRatio}`);
   }
-  const jumps = priceJumps(pairs);
+  // Splits seen across every holder of a stock; recorded ones are shown on stock pages as splits.
+  const splitQuarters = marketSplits(positions, previousQuarter);
+  const recordedSplit = (cusip: string, reportPeriod: string) => conversions.some((row) => row.from_cusip === cusip
+    && row.effective_date > previousQuarter(reportPeriod) && row.effective_date <= reportPeriod);
+  const unrecorded = splitQuarters.filter((split) => !recordedSplit(split.cusip, split.reportPeriod));
+  review += unrecorded.length;
+  console.log(`  Stock splits seen across all holders, not yet recorded (${unrecorded.length}): shown as large changes until recorded`);
+  for (const split of unrecorded) {
+    const securityId = stockOf({ cusip: split.cusip, reportPeriod: split.reportPeriod } as Position, cusips);
+    const ratio = split.ratio >= 1 ? `${split.ratio}-for-1` : `1-for-${Math.round(1 / split.ratio)}`;
+    console.log(`    ${securityId ? tickerOf(securityId) : "(no stock)"} ${split.cusip} "${split.issuer}" ${quarter(split.reportPeriod)}: ${ratio} `
+      + `(value per share ×${split.priceRatio.toFixed(3)}, shares ×${split.shareRatio.toFixed(2)}, ${split.holders} holder(s))`);
+  }
+  if (unrecorded.length > 0) {
+    console.log("      check the company's announcement, then: npm run add:security -- --conversion <CUSIP> --ticker <TICKER> --ratio <ratio> "
+      + "--date <first split-adjusted trading day> --description \"<company>'s <ratio> stock split\" --source <announcement URL> --split");
+  }
+  const split = new Set(splitQuarters.map((entry) => `${entry.cusip}|${entry.reportPeriod}`));
+  const jumps = priceJumps(pairs).filter((pair) => !split.has(`${pair.current.cusip}|${pair.current.reportPeriod}`));
   review += jumps.length;
   console.log(`  Value per share moving more than fourfold in a quarter, without a split pattern (${jumps.length}):`);
   for (const { current, priceRatio } of jumps) {

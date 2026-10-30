@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { nextQuarter, previousQuarter } from "../../src/lib/stock.ts";
 import { isValidCusip } from "../securities/identify.mts";
 import {
-  consecutivePairs, filingDeadline, latestDueQuarter, likelyPredecessors, outsideWindows, priceDisagreements, priceJumps, suspectedTypos, type CusipRecord,
+  consecutivePairs, filingDeadline, latestDueQuarter, likelyPredecessors, marketSplits, outsideWindows, priceDisagreements, priceJumps, suspectedTypos, type CusipRecord,
   type Position,
 } from "./findings.mts";
 
@@ -89,4 +89,25 @@ test("a holding that ends as a stock's holding starts with the same share count 
   // Once linked, the earlier CUSIP is recorded and no longer listed.
   const linked = { securityId: "llyva", cusip: "531229748", validFrom: "2023-09-30", validTo: "2025-12-15" };
   assert.deepEqual(likelyPredecessors(positions, [llyva, linked, siri], reported, nextQuarter), []);
+});
+
+test("a split is seen across holders: price per share falls by the ratio while share counts rise by it", () => {
+  // NVIDIA's 10-for-1 split in Q2 2024, the price itself up 37%: one holder kept its shares, one also bought.
+  const nvidia = [
+    position("tiger", "2024-03-31", "67066G104", "NVIDIA CORPORATION", 1_000_000, 903_560_000),
+    position("tiger", "2024-06-30", "67066G104", "NVIDIA CORPORATION", 10_000_000, 1_235_400_000),
+    position("coatue", "2024-03-31", "67066G104", "NVIDIA CORPORATION", 500_000, 451_780_000),
+    position("coatue", "2024-06-30", "67066G104", "NVIDIA CORPORATION", 6_000_000, 741_240_000),
+  ];
+  assert.deepEqual(marketSplits(nvidia, previousQuarter).map(({ cusip, reportPeriod, ratio, holders }) => ({ cusip, reportPeriod, ratio, holders })), [
+    { cusip: "67066G104", reportPeriod: "2024-06-30", ratio: 10, holders: 2 },
+  ]);
+  // A 55% crash with unchanged share counts is not a split, nor is a fund doubling a position that fell 40%.
+  const crash = [
+    position("baker", "2024-03-31", "000000000", "EXAMPLE BIO", 1_000_000, 20_000_000),
+    position("baker", "2024-06-30", "000000000", "EXAMPLE BIO", 1_000_000, 9_000_000),
+    position("quant", "2024-03-31", "000000000", "EXAMPLE BIO", 300_000, 6_000_000),
+    position("quant", "2024-06-30", "000000000", "EXAMPLE BIO", 610_000, 7_320_000),
+  ];
+  assert.deepEqual(marketSplits(crash, previousQuarter), []);
 });

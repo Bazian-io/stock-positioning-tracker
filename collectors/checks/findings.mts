@@ -163,6 +163,54 @@ export function consecutivePairs(positions: Position[], reportedQuarters: Set<st
   });
 }
 
+export type MarketSplit = {
+  cusip: string; reportPeriod: string; issuer: string; ratio: number; priceRatio: number; shareRatio: number; holders: number;
+};
+
+const SPLIT_RATIOS = [2, 3, 4, 5, 6, 8, 10, 15, 20, 25, 30, 40, 50];
+const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+
+// Likely stock splits seen across every holder: in one quarter the stock's value per share moved by a
+// split ratio (the market price falls tenfold in a 10-for-1 split, whatever anyone traded), allowing the
+// price itself to move −40% to +60% (−30% to +45% for 2- and 3-for-1), and at least one holder's share
+// count changed by exactly that ratio: it held through the split without trading. Funds that trade every
+// quarter double positions in falling stocks often enough that the price and the typical share change
+// alone are not evidence. Returns new shares per old share (0.1 for a 1-for-10 reverse split); a reverse
+// split that paid cash for fractions leaves no exact count and is not found.
+export function marketSplits(positions: Position[], previousQuarter: (period: string) => string): MarketSplit[] {
+  const groups = new Map<string, Position[]>();
+  for (const position of positions.filter(isLongShares)) {
+    if (!position.cusip) continue;
+    const key = `${position.cusip}|${position.reportPeriod}`;
+    groups.set(key, [...(groups.get(key) ?? []), position]);
+  }
+  const splits: MarketSplit[] = [];
+  for (const [key, current] of groups) {
+    const [cusip, reportPeriod] = key.split("|");
+    const before = groups.get(`${cusip}|${previousQuarter(reportPeriod)}`);
+    if (!before) continue;
+    const priceRatio = median(current.map(pricePerShare)) / median(before.map(pricePerShare));
+    const shareRatios = current.flatMap((position) => {
+      const earlier = before.find((other) => other.investorId === position.investorId);
+      return earlier ? [position.shares / earlier.shares] : [];
+    });
+    if (shareRatios.length === 0) continue;
+    const shareRatio = median(shareRatios);
+    const exactly = (r: number) => current.some((position) => {
+      const earlier = before.find((other) => other.investorId === position.investorId);
+      return earlier !== undefined && (r >= 1 ? position.shares === earlier.shares * r : position.shares * Math.round(1 / r) === earlier.shares);
+    });
+    const ratio = [...SPLIT_RATIOS, ...SPLIT_RATIOS.map((r) => 1 / r)].find((r) => {
+      const [low, high] = Math.max(r, 1 / r) <= 3 ? [0.7, 1.45] : [0.6, 1.6];
+      return priceRatio * r >= low && priceRatio * r <= high && exactly(r);
+    });
+    if (ratio !== undefined) {
+      splits.push({ cusip, reportPeriod, issuer: current[0].issuer, ratio, priceRatio, shareRatio, holders: shareRatios.length });
+    }
+  }
+  return splits.sort((a, b) => a.reportPeriod.localeCompare(b.reportPeriod) || a.cusip.localeCompare(b.cusip));
+}
+
 // Value per share that moved more than fourfold between quarters without the pattern of a split: a
 // likely error in the value or the share count.
 export function priceJumps(pairs: QuarterPair[], factor = 4): QuarterPair[] {

@@ -403,6 +403,9 @@ export type PlannedConversion = {
 // official source. The converted security must be real and reported by our filings in the quarter
 // before the conversion, and the stock must be identified in the quarter of the conversion, so stock
 // pages can show the shares received. heldBefore: investors' shares of the converted security then.
+// A stock split (NVIDIA's 10-for-1 on 10 June 2024) converts the stock's own CUSIP, so it must be
+// asked for: split converts a CUSIP that identifies the stock in the quarter before; otherwise the
+// CUSIP must not identify the stock in either quarter.
 export function planConversion(input: {
   fromCusip: string;
   ratio: string;
@@ -412,9 +415,10 @@ export function planConversion(input: {
   known: unknown; // OpenFIGI's result for the converted security, including delisted securities.
   heldBefore: { investor: string; shares: number }[];
   stockIdentified: boolean; // The stock has a CUSIP for the quarter that includes the conversion.
-  fromIsStock: boolean; // The converted CUSIP already identifies the stock then.
+  fromIsStock: { before: boolean; during: boolean }; // The converted CUSIP identifies the stock in the quarter before, and in the quarter of the conversion.
+  split: boolean;
 }): { conversion: PlannedConversion | null; problems: string[] } {
-  const { fromCusip, ratio, effectiveDate, description, source, known, heldBefore, stockIdentified, fromIsStock } = input;
+  const { fromCusip, ratio, effectiveDate, description, source, known, heldBefore, stockIdentified, fromIsStock, split } = input;
   const problems: string[] = [];
   if (!isValidCusip(fromCusip)) problems.push(`${fromCusip} is not a valid CUSIP`);
   if (((known as { data?: unknown[] } | null)?.data ?? []).length === 0) problems.push(`OpenFIGI does not know ${fromCusip} as a security`);
@@ -424,7 +428,11 @@ export function planConversion(input: {
   if (!/^https:\/\/\S+$/.test(source)) problems.push("The source must be the https address of an official record, such as the company's release or SEC filing");
   if (heldBefore.length === 0) problems.push(`No tracked filing reports ${fromCusip} for the quarter before ${effectiveDate}, so no holding would change`);
   if (!stockIdentified) problems.push(`The stock has no CUSIP for the quarter that includes ${effectiveDate}, so received shares would not be matched`);
-  if (fromIsStock) problems.push(`${fromCusip} already identifies the stock at that time`);
+  if (split && !fromIsStock.before) problems.push(`${fromCusip} is not the stock's CUSIP in the quarter before ${effectiveDate}, so this is not a split of the stock`);
+  if (split && Number(ratio) === 1) problems.push("A split's ratio cannot be 1");
+  if (!split && (fromIsStock.before || fromIsStock.during)) {
+    problems.push(`${fromCusip} already identifies the stock at that time; record a stock split with --split`);
+  }
   if (problems.length > 0) return { conversion: null, problems };
   return {
     problems,

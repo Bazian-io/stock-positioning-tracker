@@ -324,7 +324,8 @@ test("a conversion ratio is recorded only for a real security our filings held, 
     known: { data: [{ name: "SIRIUS XM HOLDINGS INC" }] },
     heldBefore: [{ investor: "berkshire-hathaway", shares: 132_878_213 }],
     stockIdentified: true,
-    fromIsStock: false,
+    fromIsStock: { before: false, during: false },
+    split: false,
   };
   assert.deepEqual(planConversion(input), {
     problems: [],
@@ -336,6 +337,36 @@ test("a conversion ratio is recorded only for a real security our filings held, 
   assert.deepEqual(planConversion({ ...input, known: { warning: "No identifier found." } }).problems, ["OpenFIGI does not know 82968B103 as a security"]);
   assert.match(planConversion({ ...input, heldBefore: [] }).problems[0], /no holding would change/);
   assert.match(planConversion({ ...input, stockIdentified: false }).problems[0], /would not be matched/);
-  assert.deepEqual(planConversion({ ...input, fromIsStock: true }).problems, ["82968B103 already identifies the stock at that time"]);
+  for (const fromIsStock of [{ before: true, during: true }, { before: false, during: true }, { before: true, during: false }]) {
+    assert.deepEqual(planConversion({ ...input, fromIsStock }).problems, ["82968B103 already identifies the stock at that time; record a stock split with --split"]);
+  }
   assert.match(planConversion({ ...input, source: "press release" }).problems[0], /official record/);
+});
+
+test("a stock split is recorded only for the stock's own CUSIP, when asked for", () => {
+  // NVIDIA's 10-for-1 split: trading on a split-adjusted basis began 10 June 2024.
+  const source = "https://www.sec.gov/Archives/edgar/data/1045810/000104581024000144/nvda-20240607.htm";
+  const input = {
+    fromCusip: "67066G104",
+    ratio: "10",
+    effectiveDate: "2024-06-10",
+    description: "NVIDIA's 10-for-1 stock split",
+    source,
+    known: { data: [{ name: "NVIDIA CORP" }] },
+    heldBefore: [{ investor: "appaloosa", shares: 50_000 }],
+    stockIdentified: true,
+    fromIsStock: { before: true, during: true },
+    split: true,
+  };
+  assert.deepEqual(planConversion(input), {
+    problems: [],
+    conversion: { from_cusip: "67066G104", shares_per_share: "10", effective_date: "2024-06-10", description: input.description, source_reference: source },
+  });
+  // A split that also changed the CUSIP converts the earlier CUSIP, recorded as a predecessor until the split.
+  assert.deepEqual(planConversion({ ...input, fromIsStock: { before: true, during: false } }).problems, []);
+  // A reverse split: 1 new share for each 10.
+  assert.deepEqual(planConversion({ ...input, ratio: "0.1" }).problems, []);
+  assert.deepEqual(planConversion({ ...input, fromIsStock: { before: false, during: false } }).problems,
+    ["67066G104 is not the stock's CUSIP in the quarter before 2024-06-10, so this is not a split of the stock"]);
+  assert.deepEqual(planConversion({ ...input, ratio: "1" }).problems, ["A split's ratio cannot be 1"]);
 });
