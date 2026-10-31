@@ -62,6 +62,7 @@ key reaches the browser. Public readers see only fully validated filings.
 
 **Web app**
 
+- One fixed light theme, with no theme selector or automatic dark mode.
 - Two research sections, Investors and Stocks, linked from the homepage and the main navigation.
 - Investors page: every investor in the database, grouped into asset managers, active managers and
   quantitative funds, with its latest reported value, number of positions, largest holding and a
@@ -74,7 +75,9 @@ key reaches the browser. Public readers see only fully validated filings.
   (e.g. `/investors/berkshire-hathaway`, `/investors/blackrock`). Each investor's URL name is stored
   in the database when it is added, so it stays the same if the investor's name changes. Portfolio value by quarter (chart
   and table), quarter selection, largest holdings, and the SEC filings behind each quarter with
-  links to EDGAR. Positions are combined in the database, so large filers load quickly.
+  links to EDGAR. Holdings can be searched across the whole quarter by filed company name, exact ticker
+  or CUSIP, and sorted by reported value or filed name. Filtering keeps the full portfolio totals and
+  percentages. Positions are combined in the database, so large filers load quickly.
 - Stocks page: the stocks that can be matched to holdings, with search by ticker, company name or
   CUSIP.
 - Stock pages, `/stocks/[ticker]` (e.g. `/stocks/AAPL`): which tracked investors report holding the

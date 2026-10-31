@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { investorName } from "./names";
-import { secFilingUrl, type Position } from "./portfolio";
+import { POSITION_SORTS, secFilingUrl, type Position, type PositionSort } from "./portfolio";
 import { readOnlySupabase } from "./supabase";
 
 export type Segment = "asset_manager" | "active_manager" | "quantitative";
@@ -138,8 +138,9 @@ export async function getQuarterSummaries(investorId: string): Promise<QuarterSu
 }
 
 export type PositionPage = {
-  positions: Position[]; // Largest first, from the requested offset.
+  positions: Position[]; // The requested page, in the selected order.
   total: number; // Positions in the quarter.
+  matching: number; // Positions matching the search, before pagination.
   largest: Position | null;
 };
 
@@ -154,7 +155,7 @@ type PositionRow = {
   holding_row_count: number;
 };
 
-// Part of a quarter's positions, largest first, from the portfolio_positions research view. The
+// Part of a quarter's positions from the portfolio_positions research view. The
 // database combines the filing rows, so only the positions shown are downloaded, even for filers
 // with tens of thousands of rows. quarterValueUsd is the quarter's total reported value.
 export async function getPositions(
@@ -163,30 +164,46 @@ export async function getPositions(
   quarterValueUsd: number,
   offset: number,
   limit: number,
+  options: { search?: string; sort?: PositionSort; cusips?: string[] } = {},
 ): Promise<PositionPage> {
   const db = readOnlySupabase();
-  // Ties in value are ordered by security, so pages never overlap.
-  const query = (from: number, to: number, count?: "exact") =>
-    db.from("portfolio_positions")
+  const sort = POSITION_SORTS.find((candidate) => candidate.value === options.sort) ?? POSITION_SORTS[0];
+  const search = options.search?.replace(/[%_*\\]/g, "").trim() ?? "";
+  const query = (from: number, to: number, unfiltered = false) => {
+    let request = db.from("portfolio_positions")
       .select(
         "reported_cusip, reported_issuer, reported_class, quantity::text, quantity_type, position_type, value_usd::text, holding_row_count",
-        { count },
+        { count: "exact" },
       )
       .eq("investor_id", investorId)
-      .eq("report_period", reportPeriod)
-      .order("value_usd", { ascending: false })
-      .order("reported_issuer")
+      .eq("report_period", reportPeriod);
+    if (search && !unfiltered) {
+      // Quote the pattern so punctuation cannot become PostgREST filter syntax.
+      const pattern = JSON.stringify(`*${search}*`);
+      const filters = [`reported_issuer.ilike.${pattern}`, `reported_cusip.ilike.${pattern}`];
+      if (options.cusips?.length) filters.push(`reported_cusip.in.(${options.cusips.map((cusip) => JSON.stringify(cusip)).join(",")})`);
+      request = request.or(filters.join(","));
+    }
+    const order = unfiltered ? POSITION_SORTS[0] : sort;
+    request = request.order(order.column, { ascending: order.ascending });
+    // A complete, stable tie order keeps adjacent pages from overlapping.
+    if (order.column !== "value_usd") request = request.order("value_usd", { ascending: false });
+    if (order.column !== "reported_issuer") request = request.order("reported_issuer");
+    return request
       .order("reported_cusip")
       .order("reported_class")
       .order("position_type")
       .order("quantity_type")
       .range(from, to);
+  };
+  // The summary and share bars always use the full portfolio, even for an empty search.
   const [page, top] = await Promise.all([
-    query(offset, offset + limit - 1, "exact"),
-    offset > 0 ? load<PositionRow[]>(query(0, 0), "largest position") : null,
+    query(offset, offset + limit - 1),
+    offset > 0 || search || sort !== POSITION_SORTS[0] ? query(0, 0, true) : null,
   ]);
+  if (top?.error) throw new Error(`Could not load portfolio summary: ${top.error.message}`);
   // PGRST103: the offset is past the last position, e.g. a page number beyond the last page.
-  if (page.error?.code === "PGRST103") return { positions: [], total: 0, largest: null };
+  if (page.error?.code === "PGRST103") return { positions: [], total: top?.count ?? 0, matching: 0, largest: null };
   if (page.error) throw new Error(`Could not load positions: ${page.error.message}`);
   const toPosition = (row: PositionRow): Position => ({
     cusip: row.reported_cusip,
@@ -200,8 +217,8 @@ export async function getPositions(
     portfolioShare: quarterValueUsd > 0 ? Number(row.value_usd) / quarterValueUsd : 0,
   });
   const positions = ((page.data ?? []) as PositionRow[]).map(toPosition);
-  const largest = top ? top.map(toPosition)[0] : positions[0];
-  return { positions, total: page.count ?? positions.length, largest: largest ?? null };
+  const largest = top ? ((top.data ?? []) as PositionRow[]).map(toPosition)[0] : positions[0];
+  return { positions, total: top?.count ?? page.count ?? positions.length, matching: page.count ?? positions.length, largest: largest ?? null };
 }
 
 // The SEC filings stored for one quarter, marking which ones the reported holdings use.

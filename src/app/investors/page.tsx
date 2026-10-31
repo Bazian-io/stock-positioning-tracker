@@ -64,9 +64,7 @@ export default async function InvestorsPage() {
               Tracked investors
             </h2>
             <p className={styles.cardSubtitle}>
-              Reported value is the market value of the 13F securities in each investor&apos;s latest reported quarter, not an
-              investment return. The trend shows reported value by quarter, each on its own scale. Select an investor to open
-              its dashboard.
+              Each investor&apos;s latest reported quarter. Select a name to explore its portfolio.
             </p>
           </div>
           <p className={styles.cardMeta}>
@@ -142,6 +140,13 @@ export default async function InvestorsPage() {
             </table>
           </div>
         )}
+        <details className={styles.disclosure}>
+          <summary>About reported values &amp; trends</summary>
+          <p className={styles.cardSubtitle}>
+            Reported value is the market value of the 13F securities in each investor&apos;s latest reported quarter,
+            not an investment return. The trend shows reported value by quarter, each on its own scale.
+          </p>
+        </details>
       </section>
     </main>
   );

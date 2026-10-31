@@ -258,18 +258,23 @@ export default async function StockPage({ params, searchParams }: StockPageProps
           <Link href={investorHref(row.investor.slug, row.current.state !== "no-report")} className={styles.issuer}>
             {row.investor.name}
           </Link>
-          {note && <span className={styles.securityClass}>{note}</span>}
+          {note && (
+            <details className={styles.rowDetails}>
+              <summary>{row.current.unconfirmed ? "Unclear holding" : row.current.state === "not-held" && row.current.confidentialOmissions ? "Zero is uncertain" : "Options reported"}</summary>
+              <p>{note}</p>
+            </details>
+          )}
         </th>
-        <td className={styles.numeric}>
+        <td className={styles.numeric} data-label="Reported shares">
           {row.current.state === "held" ? formatNumber(row.current.shares) : row.current.state === "not-held" ? "0" : "—"}
         </td>
-        <td className={styles.numeric} title={row.current.state === "held" ? formatUsd(row.current.valueUsd) : undefined}>
+        <td className={styles.numeric} data-label="Reported value" title={row.current.state === "held" ? formatUsd(row.current.valueUsd) : undefined}>
           {row.current.state === "held" ? formatUsdCompact(row.current.valueUsd) : "—"}
         </td>
-        <td className={`${styles.numeric} ${styles.optional}`}>
+        <td className={`${styles.numeric} ${styles.optional}`} data-label="Share of portfolio">
           {row.current.state === "held" ? formatPercent(row.portfolioShare) : "—"}
         </td>
-        <td className={styles.security}>
+        <td className={`${styles.security} ${styles.changeCell}`} data-label={`Change from ${quarterLabel(previousQuarter(selected))}`}>
           {row.current.state === "no-report" || row.current.state === "unclear" ? (
             <span className={styles.secondary}>
               {row.current.state === "unclear" ? "Not comparable: holding unclear" : `No ${label} report in our data`}
@@ -308,9 +313,14 @@ export default async function StockPage({ params, searchParams }: StockPageProps
               {stock.companyName && <span>{stock.companyName}</span>}
               <span>{stock.ticker} · {EXCHANGE_NAMES[stock.exchange] ?? stock.exchange}</span>
               <span>{kind}</span>
-              {currentCusips.length > 0 && <span>CUSIP {currentCusips.join(", ")}</span>}
-              {otherCusips.length > 0 && <span>Also matched under CUSIP {otherCusips.join("; ")}</span>}
             </p>
+            <details className={styles.disclosure}>
+              <summary>Security identifiers</summary>
+              <div className={styles.meta}>
+                {currentCusips.length > 0 && <span>CUSIP {currentCusips.join(", ")}</span>}
+                {otherCusips.length > 0 && <span>Also matched under CUSIP {otherCusips.join("; ")}</span>}
+              </div>
+            </details>
           </div>
           <QuarterSelect
             selected={selected}
@@ -340,17 +350,18 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                   Tracked investors, {label}
                 </h2>
                 <p className={styles.cardSubtitle}>
-                  Shares of {stock.ticker} reported on Form 13F for the quarter ended {formatDate(selected)}, and the change
-                  from the quarter before. Only the investors tracked here are shown, not total institutional ownership.
+                  Reported at {formatDate(selected)}. These are tracked investors, not total institutional ownership.
                 </p>
               </div>
-              <p className={styles.cardMeta}>
-                {holders.length} holding · {notHeld.length + notHeldEither.length} reported without it
-                {unclear.length > 0 ? ` · ${unclear.length} unclear` : ""} · {noReport.length} no report
-              </p>
             </div>
+            <ul className={styles.holderCounts} aria-label="Investor reporting coverage">
+              <li><strong>{holders.length}</strong> holding</li>
+              <li><strong>{notHeld.length + notHeldEither.length}</strong> reported without it</li>
+              {unclear.length > 0 && <li><strong>{unclear.length}</strong> unclear</li>}
+              <li><strong>{noReport.length}</strong> no report</li>
+            </ul>
             <div className={styles.tableScroll}>
-              <table className={styles.table}>
+              <table className={`${styles.table} ${styles.holderTable}`} role="table">
                 <caption className={styles.visuallyHidden}>
                   Tracked investors&apos; reported {stock.ticker} holdings, {label}
                 </caption>
@@ -417,8 +428,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                   Reported {stock.ticker} shares by quarter{chartInvestor ? `, ${chartInvestor.name}` : ""}
                 </h2>
                 <p className={styles.cardSubtitle}>
-                  Shares held at each quarter end, as reported. Changes reflect buying and selling, and corporate actions
-                  such as stock splits; they are not investment returns. Select a bar to view that quarter.
+                  Quarter-end shares as reported, without adjusting for stock splits. Select a bar to view that quarter.
                 </p>
               </div>
               {charted.length > 0 && chartInvestor && (
@@ -481,9 +491,9 @@ export default async function StockPage({ params, searchParams }: StockPageProps
             )}
           </section>
 
-          <section className={styles.card} aria-labelledby="about-stock">
+          <details className={`${styles.card} ${styles.sourceDetails}`}>
+            <summary id="about-stock">About these numbers &amp; methodology</summary>
             <div>
-              <h2 id="about-stock" className={styles.cardTitle}>About these numbers</h2>
               <ul className={styles.notes}>
                 <li>
                   Shares and values are as reported on Form 13F at each quarter end. Reported value is the market value
@@ -525,7 +535,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                 </li>
               </ul>
             </div>
-          </section>
+          </details>
         </PendingFrame>
       </main>
     </QuarterNavigation>

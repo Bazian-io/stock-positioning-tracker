@@ -114,20 +114,23 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
           </div>
         )}
         {pageCount > 1 && (
-          <nav className={styles.tableLinks} aria-label="Stock list pages">
+          <nav className={styles.pagination} aria-label="Stock list pages">
             <span className={styles.secondary}>
               Stocks {formatNumber(first)}–{formatNumber(first + stocks.length - 1)} of {formatNumber(total)}
             </span>
-            {pageNumber > 1 && (
-              <Link href={pageHref(pageNumber - 1)} className={styles.tableToggle}>
-                ← Previous
-              </Link>
-            )}
-            {pageNumber < pageCount && (
-              <Link href={pageHref(pageNumber + 1)} className={styles.tableToggle}>
-                Next →
-              </Link>
-            )}
+            <div className={styles.pageActions}>
+              <span className={styles.secondary}>Page {formatNumber(pageNumber)} of {formatNumber(pageCount)}</span>
+              {pageNumber > 1 && (
+                <Link href={pageHref(pageNumber - 1)} className={styles.pageLink}>
+                  ← Previous
+                </Link>
+              )}
+              {pageNumber < pageCount && (
+                <Link href={pageHref(pageNumber + 1)} className={styles.pageLink}>
+                  Next →
+                </Link>
+              )}
+            </div>
           </nav>
         )}
       </section>

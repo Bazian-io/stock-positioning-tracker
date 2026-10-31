@@ -1,4 +1,4 @@
-/* Investor dashboard. Colors come from the tokens in app/globals.css (light and dark). */
+/* Shared research dashboards. Colors come from the single palette in app/globals.css. */
 
 .page {
   width: 100%;
@@ -33,6 +33,10 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px 24px;
+}
+
+.header > div {
+  min-width: 0;
 }
 
 .title {
@@ -141,6 +145,7 @@
   justify-content: center;
   gap: 10px;
   padding: 24px;
+  background: var(--surface-strong);
 }
 
 .tiles {
@@ -611,12 +616,69 @@
   font-weight: 550;
 }
 
-.tableLinks {
+.pagination {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 20px;
-  font-size: 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.pageActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pageLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--text-primary);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.pageLink:hover {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.emptyState {
+  padding: 24px 16px;
+  border: 1px dashed var(--axis);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.holderCounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.holderCounts strong {
+  margin-right: 4px;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* A cell whose notes wrap, so a long note does not push the other columns out of the card. */
@@ -695,6 +757,45 @@
 
 /* Stock search */
 
+.tableControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-strong);
+}
+
+.searchField {
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  min-width: 0;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.searchField .searchInput {
+  flex: none;
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.tableControls .button,
+.tableControls .tableToggle {
+  align-self: flex-end;
+}
+
+.tableControls .tableToggle {
+  margin-bottom: 10px;
+}
+
 .search {
   display: flex;
   flex-wrap: wrap;
@@ -717,6 +818,51 @@
 }
 
 /* Sources and notes */
+
+.disclosure {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.disclosure > summary,
+.rowDetails > summary {
+  width: fit-content;
+  color: var(--link);
+  cursor: pointer;
+}
+
+.disclosure[open] > summary {
+  margin-bottom: 8px;
+}
+
+.rowDetails {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.rowDetails p {
+  max-width: 44ch;
+  margin-top: 6px;
+  color: var(--text-secondary);
+}
+
+.sourceDetails {
+  display: block;
+}
+
+.sourceDetails > summary {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sourceDetails[open] > summary {
+  margin-bottom: 20px;
+}
 
 .split {
   display: grid;
@@ -793,13 +939,17 @@
 .button {
   align-self: flex-start;
   padding: 8px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--surface-strong);
-  color: var(--text-primary);
+  background: var(--accent-strong);
+  color: #ffffff;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+
+.button:hover {
+  background: var(--link);
 }
 
 .visuallyHidden {
@@ -849,6 +999,16 @@
     width: 100%;
   }
 
+  .tableControls .searchField {
+    flex-basis: 100%;
+  }
+
+  .searchInput,
+  .searchField .searchInput,
+  .selectWrap select {
+    font-size: 16px;
+  }
+
   /* Phones: keep the security, value and share columns on screen. */
   .optional,
   .shareTrack {
@@ -869,7 +1029,149 @@
     white-space: normal;
   }
 
+  .holdingsTable {
+    font-size: 13px;
+  }
+
+  .holdingsTable th,
+  .holdingsTable td {
+    padding: 8px 6px;
+  }
+
+  .holdingsTable .shareValue {
+    min-width: 0;
+  }
+
   .table .wrapping {
     min-width: 0;
+  }
+}
+
+/* Keep every ownership figure available on phones without sideways scrolling. */
+@media (max-width: 800px) {
+  .holderTable,
+  .holderTable tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .holderTable thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .holderTable tbody tr:not(.groupRow):not(.namesRow) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--grid);
+  }
+
+  .holderTable tbody tr > * {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .holderTable th[scope="row"],
+  .holderTable .changeCell {
+    grid-column: 1 / -1;
+  }
+
+  .holderTable td[data-label] {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .holderTable .numeric {
+    text-align: left !important;
+  }
+
+  .holderTable td[data-label]::before {
+    content: attr(data-label);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 550;
+  }
+
+  .holderTable .groupRow,
+  .holderTable .namesRow {
+    display: block;
+    padding: 16px 0;
+  }
+
+  .holderTable .groupRow th,
+  .holderTable .namesRow td {
+    display: block;
+  }
+}
+
+@media (max-width: 480px) {
+  .holdingsTable,
+  .holdingsTable tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .holdingsTable thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .holdingsTable tbody tr {
+    display: grid;
+    grid-template-columns: 20px repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--grid);
+  }
+
+  .holdingsTable tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .holdingsTable tbody tr > * {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .holdingsTable .security {
+    grid-column: 2 / -1;
+    overflow-wrap: anywhere;
+  }
+
+  .holdingsTable td[data-label] {
+    display: flex;
+    flex-direction: column;
+    grid-row: 2;
+    grid-column: 2;
+    gap: 4px;
+    text-align: left !important;
+  }
+
+  .holdingsTable td[data-label="Share of portfolio"] {
+    grid-column: 3;
+  }
+
+  .holdingsTable td[data-label]::before {
+    content: attr(data-label);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 550;
+  }
+
+  .holdingsTable .share {
+    justify-content: flex-start;
   }
 }

@@ -16,6 +16,14 @@ export type Position = {
   portfolioShare: number; // Fraction of the quarter's total reported value.
 };
 
+export const POSITION_SORTS = [
+  { value: "value-desc", label: "Value: highest first", column: "value_usd", ascending: false },
+  { value: "value-asc", label: "Value: lowest first", column: "value_usd", ascending: true },
+  { value: "name-asc", label: "Filed name: A–Z", column: "reported_issuer", ascending: true },
+] as const;
+
+export type PositionSort = (typeof POSITION_SORTS)[number]["value"];
+
 
 // Evenly spaced axis ticks from zero to the first round number at or above the maximum.
 export function axisTicks(max: number, targetCount = 4): number[] {

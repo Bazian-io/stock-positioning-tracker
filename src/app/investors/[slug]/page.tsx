@@ -6,13 +6,14 @@ import { HoldingsTable, type TableLink } from "@/components/dashboard/holdings-t
 import { PendingFrame, QuarterNavigation, QuarterSelect } from "@/components/dashboard/quarter-navigation";
 import { ValueChart } from "@/components/dashboard/value-chart";
 import {
-  axisTicks, formatDate, formatFilingDate, formatNumber, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact,
+  POSITION_SORTS, axisTicks, formatDate, formatFilingDate, formatNumber, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact,
   quarterLabel, quarterParts,
 } from "@/lib/portfolio";
 import {
   getInvestorBySlug, getPositions, getQuarterFilings, getQuarterSummaries, type QuarterFiling,
 } from "@/lib/portfolio-data";
-import { getStockLinks } from "@/lib/stock-data";
+import { getStock, getStockLinks } from "@/lib/stock-data";
+import { identifiesStock } from "@/lib/stock";
 
 type InvestorPageProps = {
   params: Promise<{ slug: string }>;
@@ -39,7 +40,7 @@ function filingRole(filing: QuarterFiling): string {
 
 // One dashboard for every investor in the database, at /investors/[slug].
 export default async function InvestorPage({ params, searchParams }: InvestorPageProps) {
-  const [{ slug }, { quarter: requested, holdings, page }] = await Promise.all([params, searchParams]);
+  const [{ slug }, { quarter: requested, holdings, page, q, sort: requestedSort }] = await Promise.all([params, searchParams]);
   const investor = await getInvestorBySlug(slug);
   if (!investor) notFound();
   const quarters = await getQuarterSummaries(investor.id);
@@ -47,11 +48,18 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
   const selected = requested === undefined ? latest : quarters.find((quarter) => quarter.reportPeriod === requested);
   if (!latest || !selected) notFound();
 
-  const showAll = holdings === "all";
+  const query = typeof q === "string" ? q.trim().slice(0, 100) : "";
+  const sort = POSITION_SORTS.find((candidate) => candidate.value === requestedSort) ?? POSITION_SORTS[0];
+  const filtered = query !== "" || sort !== POSITION_SORTS[0];
+  const showAll = holdings === "all" || filtered;
   const pageNumber = showAll && typeof page === "string" && /^[1-9]\d{0,5}$/.test(page) ? Number(page) : 1;
   const limit = showAll ? ALL_HOLDINGS_PAGE : TOP_HOLDINGS;
-  const [{ positions, total, largest }, filings] = await Promise.all([
-    getPositions(investor.id, selected.reportPeriod, selected.valueUsd, (pageNumber - 1) * limit, limit),
+  const ticker = query.toUpperCase().replace(/[./]/g, "-");
+  const matchingStock = /^[A-Z0-9-]{1,10}$/.test(ticker) ? await getStock(ticker) : null;
+  const cusips = matchingStock?.cusips.filter((period) => identifiesStock([period], period.cusip, selected.reportPeriod))
+    .map((period) => period.cusip);
+  const [{ positions, total, matching, largest }, filings] = await Promise.all([
+    getPositions(investor.id, selected.reportPeriod, selected.valueUsd, (pageNumber - 1) * limit, limit, { search: query, sort: sort.value, cusips }),
     getQuarterFilings(investor, selected.reportPeriod),
   ]);
   if (positions.length === 0 && pageNumber > 1) notFound();
@@ -68,14 +76,16 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
 
   // Links within the dashboard keep the selected quarter.
   const pagePath = `/investors/${investor.slug}`;
-  const dashboardHref = (view: { all?: boolean; page?: number } = {}) => {
-    const query = new URLSearchParams();
-    if (!isLatest) query.set("quarter", selected.reportPeriod);
-    if (view.all) query.set("holdings", "all");
-    if (view.page && view.page > 1) query.set("page", String(view.page));
-    return query.size > 0 ? `${pagePath}?${query}` : pagePath;
+  const dashboardHref = (view: { all?: boolean; page?: number; clear?: boolean } = {}) => {
+    const search = new URLSearchParams();
+    if (!isLatest) search.set("quarter", selected.reportPeriod);
+    if (view.all) search.set("holdings", "all");
+    if (query && !view.clear) search.set("q", query);
+    if (sort !== POSITION_SORTS[0] && !view.clear) search.set("sort", sort.value);
+    if (view.page && view.page > 1) search.set("page", String(view.page));
+    return search.size > 0 ? `${pagePath}?${search}` : pagePath;
   };
-  const pageCount = Math.ceil(total / ALL_HOLDINGS_PAGE);
+  const pageCount = Math.ceil(matching / ALL_HOLDINGS_PAGE);
   const tableLinks: TableLink[] = [];
   if (showAll && pageNumber > 1) {
     tableLinks.push({ href: `${dashboardHref({ all: true, page: pageNumber - 1 })}#holdings`, label: "← Previous" });
@@ -83,15 +93,18 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
   if (showAll && pageNumber < pageCount) {
     tableLinks.push({ href: `${dashboardHref({ all: true, page: pageNumber + 1 })}#holdings`, label: "Next →" });
   }
-  if (total > TOP_HOLDINGS) {
+  if (total > TOP_HOLDINGS && !filtered) {
     tableLinks.push(showAll
       ? { href: dashboardHref(), label: `Show the top ${TOP_HOLDINGS}`, keepScroll: true }
       : { href: dashboardHref({ all: true }), label: `Show all ${formatNumber(total)} positions`, keepScroll: true });
   }
   const firstRank = showAll ? (pageNumber - 1) * ALL_HOLDINGS_PAGE + 1 : 1;
-  const tableStatus = showAll && pageCount > 1
-    ? `Positions ${formatNumber(firstRank)}–${formatNumber(firstRank + positions.length - 1)} of ${formatNumber(total)}`
-    : undefined;
+  const tableStatus = matching === 0 ? (query ? "No matching holdings" : "No holdings reported")
+    : `${formatNumber(firstRank)}–${formatNumber(firstRank + positions.length - 1)} of ${formatNumber(matching)} ${query ? "matching " : ""}${matching === 1 ? "holding" : "holdings"}`;
+  const keep: Record<string, string> = {};
+  if (showAll) keep.holdings = "all";
+  if (query) keep.q = query;
+  if (sort !== POSITION_SORTS[0]) keep.sort = sort.value;
 
   const ticks = axisTicks(Math.max(...quarters.map((quarter) => quarter.valueUsd)));
   const scaleMax = ticks.at(-1) ?? 1;
@@ -107,7 +120,7 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
   const chartTicks = ticks.map((tick) => ({ label: formatUsdAxis(tick), position: (tick / scaleMax) * 100 }));
 
   return (
-    <QuarterNavigation>
+    <QuarterNavigation keep={keep}>
       <main className={styles.page}>
         <nav className={styles.breadcrumb} aria-label="Breadcrumb">
           <Link href="/investors">Investors</Link>
@@ -119,11 +132,16 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
           <div>
             <h1 className={styles.title}>{investor.name}</h1>
             <p className={styles.meta}>
-              {investor.filedName !== investor.name && <span>Files as {investor.filedName}</span>}
-              <span>CIK {investor.cik}</span>
               <span>Holdings reported to the SEC on Form 13F</span>
-              <a href={`https://www.sec.gov/edgar/browse/?CIK=${Number(investor.cik)}`}>SEC EDGAR filings ↗</a>
             </p>
+            <details className={styles.disclosure}>
+              <summary>Investor &amp; filing details</summary>
+              <div className={styles.meta}>
+                {investor.filedName !== investor.name && <span>Files as {investor.filedName}</span>}
+                <span>CIK {investor.cik}</span>
+                <a href={`https://www.sec.gov/edgar/browse/?CIK=${Number(investor.cik)}`}>SEC EDGAR filings ↗</a>
+              </div>
+            </details>
           </div>
           <QuarterSelect
             selected={selected.reportPeriod}
@@ -154,9 +172,9 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
               </p>
               <p className={styles.heroValue}>{formatUsdCompact(selected.valueUsd)}</p>
               <p className={styles.note}>
-                {formatUsd(selected.valueUsd)}: the market value of the 13F securities held at quarter end, as
-                reported to the SEC. A historical snapshot, not an investment return.
+                {formatUsd(selected.valueUsd)} · Quarter-end market value in USD
               </p>
+              <p className={styles.note}>A historical disclosure, not an investment return.</p>
             </div>
             <div className={styles.tiles}>
               <div className={styles.tile}>
@@ -196,7 +214,7 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
                 </h2>
                 <p className={styles.cardSubtitle}>
                   {quarters.length > 1
-                    ? `Total market value of the 13F securities reported at each quarter end, ${chartQuarters[0].label} to ${chartQuarters[chartQuarters.length - 1].label}. Changes reflect trading and price moves, not investment returns. Select a bar to view that quarter.`
+                    ? `${chartQuarters[0].label}–${chartQuarters[chartQuarters.length - 1].label} · Select a bar to view that quarter.`
                     : `Only one quarter, ${label}, has been imported for this investor so far. The chart appears once there are two quarters to compare.`}
                 </p>
               </div>
@@ -239,76 +257,110 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
             <div className={styles.cardHeader}>
               <div>
                 <h2 id="holdings" className={styles.cardTitle}>
-                  Largest holdings, {label}
+                  {showAll ? "Portfolio holdings" : "Largest holdings"}, {label}
                 </h2>
                 <p className={styles.cardSubtitle}>
-                  Ranked by reported value. Filers can report one position in several rows, for example one per
-                  subsidiary or adviser; rows for the same security are combined here. Share classes stay separate.
+                  {sort.label}. Portfolio percentages always use the full quarter&apos;s reported value.
                 </p>
               </div>
               <p className={styles.cardMeta}>
                 {formatNumber(total)} securities · {formatUsdCompact(selected.valueUsd)}
               </p>
             </div>
+            <form key={`${selected.reportPeriod}:${query}:${sort.value}`} className={styles.tableControls} action={`${pagePath}#holdings`} role="search" aria-label="Search portfolio holdings">
+              <input type="hidden" name="quarter" value={selected.reportPeriod} />
+              <input type="hidden" name="holdings" value="all" />
+              <label className={styles.searchField}>
+                Search holdings
+                <input name="q" type="search" defaultValue={query} maxLength={100} placeholder="Company, ticker or CUSIP" className={styles.searchInput} />
+              </label>
+              <label className={styles.quarterSelect}>
+                Sort by
+                <span className={styles.selectWrap}>
+                  <select name="sort" defaultValue={sort.value}>
+                    {POSITION_SORTS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </span>
+              </label>
+              <button type="submit" className={styles.button}>Apply</button>
+              {filtered && <Link href={`${dashboardHref({ all: true, clear: true })}#holdings`} className={styles.tableToggle} scroll={false}>Clear filters</Link>}
+            </form>
+            <details className={styles.disclosure}>
+              <summary>How these holdings are shown</summary>
+              <p className={styles.cardSubtitle}>
+                Filers can report one position in several rows, for example one per subsidiary or adviser; rows for the
+                same security are combined here. Share classes stay separate. Search matches names as filed, CUSIPs and
+                exact verified tickers. It searches the whole quarter, including holdings beyond this page.
+              </p>
+            </details>
+            {positions.length === 0 && (
+              <p className={styles.emptyState}>
+                {query ? <>No holdings match &ldquo;{query}&rdquo; in {label}. Try a company name, exact ticker or CUSIP.</> : "No holdings were reported for this quarter."}
+              </p>
+            )}
             <HoldingsTable
               positions={positions}
               firstRank={firstRank}
               largestShare={largest?.portfolioShare ?? 0}
-              caption={`Largest holdings, ${label}, combined by security`}
+              caption={`Holdings, ${label}, combined by security. ${sort.label}`}
               links={tableLinks}
               status={tableStatus}
+              pageLabel={showAll && pageCount > 1 ? `Page ${formatNumber(pageNumber)} of ${formatNumber(pageCount)}` : undefined}
               stocks={stocks}
             />
           </section>
 
-          <section className={`${styles.card} ${styles.split}`} aria-label="Sources and notes">
-            <div>
-              <h2 className={styles.cardTitle}>SEC filings for {label}</h2>
-              <ul className={styles.filings}>
-                {filings.map((filing) => (
-                  <li key={filing.accessionNumber}>
-                    <span className={styles.filingRole}>
-                      {filingRole(filing)}
-                      <span className={styles.badge} data-tone={filing.counted ? undefined : "muted"}>
-                        {filing.counted ? "Counted" : "Replaced by restatement"}
+          <details className={`${styles.card} ${styles.sourceDetails}`}>
+            <summary>SEC sources &amp; methodology</summary>
+            <div className={styles.split}>
+              <div>
+                <h2 className={styles.cardTitle}>SEC filings for {label}</h2>
+                <ul className={styles.filings}>
+                  {filings.map((filing) => (
+                    <li key={filing.accessionNumber}>
+                      <span className={styles.filingRole}>
+                        {filingRole(filing)}
+                        <span className={styles.badge} data-tone={filing.counted ? undefined : "muted"}>
+                          {filing.counted ? "Counted" : "Replaced by restatement"}
+                        </span>
                       </span>
-                    </span>
-                    <span className={styles.filingMeta}>
-                      {filing.formType} · filed {formatFilingDate(filing.filedAt)} ·{" "}
-                      <a href={filing.secUrl}>{filing.accessionNumber} ↗</a>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h2 className={styles.cardTitle}>About these numbers</h2>
-              <ul className={styles.notes}>
-                <li>
-                  Reported value is the market value, at quarter-end prices, of the securities {investor.name} listed
-                  on Form 13F. It leaves out short positions, cash, private holdings and anything else outside the
-                  SEC&apos;s 13F list.
-                </li>
-                <li>
-                  These are historical disclosures, not investment performance. A change between quarters mixes
-                  buying and selling with price moves.
-                </li>
-                <li>
-                  Amendments are applied as filed: a restatement replaces the original report, and a new-holdings
-                  amendment adds positions, such as ones first kept confidential.
-                </li>
-                {filings.some((filing) => filing.filedAt < "2023-01-03") && (
-                  <li>Filings made before 2023 reported values in thousands of dollars; they are shown in dollars here.</li>
-                )}
-                {selected.confidentialOmissions && (
+                      <span className={styles.filingMeta}>
+                        {filing.formType} · filed {formatFilingDate(filing.filedAt)} ·{" "}
+                        <a href={filing.secUrl}>{filing.accessionNumber} ↗</a>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h2 className={styles.cardTitle}>About these numbers</h2>
+                <ul className={styles.notes}>
                   <li>
-                    A filing for this quarter says some holdings were omitted under an SEC confidential treatment
-                    request. Positions disclosed later by amendment are included above.
+                    Reported value is the market value, at quarter-end prices, of the securities {investor.name} listed
+                    on Form 13F. It leaves out short positions, cash, private holdings and anything else outside the
+                    SEC&apos;s 13F list.
                   </li>
-                )}
-              </ul>
+                  <li>
+                    These are historical disclosures, not investment performance. A change between quarters mixes
+                    buying and selling with price moves.
+                  </li>
+                  <li>
+                    Amendments are applied as filed: a restatement replaces the original report, and a new-holdings
+                    amendment adds positions, such as ones first kept confidential.
+                  </li>
+                  {filings.some((filing) => filing.filedAt < "2023-01-03") && (
+                    <li>Filings made before 2023 reported values in thousands of dollars; they are shown in dollars here.</li>
+                  )}
+                  {selected.confidentialOmissions && (
+                    <li>
+                      A filing for this quarter says some holdings were omitted under an SEC confidential treatment
+                      request. Positions disclosed later by amendment are included above.
+                    </li>
+                  )}
+                </ul>
+              </div>
             </div>
-          </section>
+          </details>
         </PendingFrame>
       </main>
     </QuarterNavigation>

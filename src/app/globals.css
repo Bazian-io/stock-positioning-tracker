@@ -1,5 +1,4 @@
-/* Design tokens. Chart colors follow a validated palette: one accent for the selected data,
-   a recessive gray for context, hairline grids. Dark mode has its own selected values. */
+/* One light palette: blue for selected data, quiet grays for context and grids. */
 :root {
   color-scheme: light;
   --page: #f9f9f7;
@@ -7,7 +6,7 @@
   --surface-strong: #ffffff;
   --text-primary: #0b0b0b;
   --text-secondary: #52514e;
-  --text-muted: #898781;
+  --text-muted: #6f6d67;
   --border: rgba(11, 11, 11, 0.1);
   --grid: #e1e0d9;
   --axis: #c3c2b7;
@@ -23,30 +22,6 @@
   --radius: 12px;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --page: #0d0d0d;
-    --surface: #1a1a19;
-    --surface-strong: #242423;
-    --text-primary: #f0efec;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-    --border: rgba(255, 255, 255, 0.1);
-    --grid: #2c2c2a;
-    --axis: #383835;
-    --accent: #3987e5;
-    --accent-strong: #5598e7;
-    --accent-wash: rgba(57, 135, 229, 0.16);
-    --deemphasis: #5c5b56;
-    --deemphasis-strong: #75736d;
-    --row-hover: rgba(255, 255, 255, 0.03);
-    --link: #86b6ef;
-    --shadow: none;
-    --tooltip-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-  }
 }
 
 * {
@@ -192,7 +167,7 @@ a {
 
 .section-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   gap: 12px;
 }
 
