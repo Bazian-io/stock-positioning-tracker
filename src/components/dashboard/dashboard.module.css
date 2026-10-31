@@ -12,9 +12,15 @@
 
 .breadcrumb {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.returnLink {
+  align-self: flex-start;
+  font-size: 13px;
 }
 
 .breadcrumb a {

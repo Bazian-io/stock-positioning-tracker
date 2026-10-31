@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import styles from "@/components/dashboard/dashboard.module.css";
-import { formatNumber } from "@/lib/portfolio";
+import { formatNumber, quarterLabel } from "@/lib/portfolio";
 import { EXCHANGE_NAMES } from "@/lib/stock";
-import { getStock, getStockPage } from "@/lib/stock-data";
+import { getStockPage } from "@/lib/stock-data";
+import { reportingQuarter, researchHref, resultPage, searchQuery } from "@/lib/research";
 
 export const metadata: Metadata = {
   title: "Stocks",
@@ -16,18 +17,17 @@ const STOCKS_PER_PAGE = 50;
 // The stocks we can match to reported holdings, a page at a time, with search by ticker, company name
 // or CUSIP.
 export default async function StocksPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const { q, page } = await searchParams;
-  const query = typeof q === "string" ? q.trim() : "";
-  const pageNumber = typeof page === "string" && /^[1-9]\d{0,5}$/.test(page) ? Number(page) : 1;
-  // An exact ticker goes straight to its page.
-  const ticker = query.toUpperCase().replace(/[./]/g, "-");
-  if (/^[A-Z0-9-]{1,10}$/.test(ticker) && (await getStock(ticker))) redirect(`/stocks/${encodeURIComponent(ticker)}`);
+  const { q, page, quarter: requestedQuarter } = await searchParams;
+  const query = searchQuery(q);
+  const quarter = reportingQuarter(requestedQuarter);
+  const pageNumber = resultPage(page);
   const { stocks, total } = await getStockPage(query, (pageNumber - 1) * STOCKS_PER_PAGE, STOCKS_PER_PAGE);
   if (stocks.length === 0 && pageNumber > 1) notFound();
 
   // Page links keep the search.
   const pageHref = (number: number) => {
     const params = new URLSearchParams();
+    if (quarter) params.set("quarter", quarter);
     if (query) params.set("q", query);
     if (number > 1) params.set("page", String(number));
     return params.size > 0 ? `/stocks?${params}` : "/stocks";
@@ -42,6 +42,7 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
           <h1 className={styles.title}>Stocks</h1>
           <p className={styles.meta}>
             <span>Which tracked investors report holding a stock, quarter by quarter</span>
+            {quarter && <span>Researching {quarterLabel(quarter)}</span>}
           </p>
         </div>
       </header>
@@ -60,6 +61,7 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
           <p className={styles.cardMeta}>{total === 1 ? "1 stock" : `${formatNumber(total)} stocks`}</p>
         </div>
         <form className={styles.search} action="/stocks" role="search">
+          {quarter && <input type="hidden" name="quarter" value={quarter} />}
           <label htmlFor="stock-search" className={styles.visuallyHidden}>
             Search stocks
           </label>
@@ -67,6 +69,7 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
             id="stock-search"
             name="q"
             type="search"
+            maxLength={100}
             defaultValue={query}
             placeholder="Ticker, company name or CUSIP"
             className={styles.searchInput}
@@ -77,7 +80,7 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
         </form>
         {stocks.length === 0 ? (
           <p className={styles.cardSubtitle}>
-            No stock matches “{query}”. <Link href="/stocks">Show all stocks</Link>
+            No stock matches “{query}”. <Link href={researchHref("/stocks", { quarter })}>Show all stocks</Link>
           </p>
         ) : (
           <div className={styles.tableScroll}>
@@ -93,9 +96,11 @@ export default async function StocksPage({ searchParams }: { searchParams: Promi
               </thead>
               <tbody>
                 {stocks.map((stock) => (
-                  <tr key={stock.securityId}>
+                  <tr key={stock.securityId} id={`stock-${stock.ticker}`}>
                     <th scope="row">
-                      <Link href={`/stocks/${encodeURIComponent(stock.ticker)}`} className={styles.issuer}>
+                      <Link href={researchHref(`/stocks/${encodeURIComponent(stock.ticker)}`, {
+                        quarter, from: `${pageHref(pageNumber)}#stock-${stock.ticker}`,
+                      })} className={styles.issuer}>
                         {stock.ticker}
                       </Link>
                     </th>

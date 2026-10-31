@@ -7,6 +7,7 @@ import { ValueSparkline } from "@/components/dashboard/sparkline";
 import { formatNumber, formatPercent, formatUsdCompact, quarterLabel } from "@/lib/portfolio";
 import { getInvestorSummaries, getPositions, type InvestorSummary, type Segment } from "@/lib/portfolio-data";
 import { getStockLinks } from "@/lib/stock-data";
+import { reportingQuarter, researchHref, type ResearchParams } from "@/lib/research";
 
 export const metadata: Metadata = {
   title: "Investors",
@@ -22,29 +23,29 @@ const SEGMENTS: { segment: Segment | null; title: string; detail: string }[] = [
 ];
 
 // "Q2 2026 · 20 quarters since Q3 2021"
-function history(investor: InvestorSummary): string {
-  if (!investor.firstQuarter || !investor.latestQuarter) return "No quarters imported yet";
-  if (investor.quarterCount === 1) return `${quarterLabel(investor.latestQuarter)} · 1 quarter`;
-  return `${quarterLabel(investor.latestQuarter)} · ${investor.quarterCount} quarters since ${quarterLabel(investor.firstQuarter)}`;
+function history(investor: InvestorSummary, period: string | null): string {
+  if (!period) return "No quarters imported yet";
+  if (!investor.values.some((quarter) => quarter.reportPeriod === period)) return `${quarterLabel(period)} · No report imported`;
+  if (investor.quarterCount === 1) return `${quarterLabel(period)} · 1 quarter`;
+  return `${quarterLabel(period)} · ${investor.quarterCount} quarters since ${quarterLabel(investor.firstQuarter!)}`;
 }
 
-export default async function InvestorsPage() {
+export default async function InvestorsPage({ searchParams }: { searchParams: Promise<ResearchParams> }) {
   // Rendered per request, like the dashboards, so newly imported investors and quarters appear at once.
   await connection();
+  const quarter = reportingQuarter((await searchParams).quarter);
   const investors = await getInvestorSummaries();
-  // Each investor's latest quarter: how many positions, and the largest one.
-  const latest = await Promise.all(investors.map((investor) => (investor.latestQuarter && investor.latestValueUsd !== null
-    ? getPositions(investor.id, investor.latestQuarter, investor.latestValueUsd, 0, 1)
-    : null)));
-  const periods = [...new Set(investors.flatMap((investor) => (investor.latestQuarter ? [investor.latestQuarter] : [])))];
-  const stocks = Object.assign({}, ...await Promise.all(periods.map((period) => getStockLinks(
-    investors.flatMap((investor, index) => {
-      const cusip = latest[index]?.largest?.cusip;
-      return investor.latestQuarter === period && cusip ? [cusip] : [];
-    }),
-    period,
-  ))));
-  const rows = investors.map((investor, index) => ({ investor, positions: latest[index] }));
+  const rows = await Promise.all(investors.map(async (investor) => {
+    const period = quarter ?? investor.latestQuarter;
+    const valueUsd = investor.values.find((summary) => summary.reportPeriod === period)?.valueUsd ?? null;
+    const positions = period && valueUsd !== null ? await getPositions(investor.id, period, valueUsd, 0, 1) : null;
+    return { investor, period, valueUsd, positions };
+  }));
+  const periods = [...new Set(rows.flatMap((row) => row.period ? [row.period] : []))];
+  const stocks = new Map(await Promise.all(periods.map(async (period) => [period, await getStockLinks(
+    rows.flatMap((row) => row.period === period && row.positions?.largest?.cusip ? [row.positions.largest.cusip] : []), period,
+  )] as const)));
+  const listHref = researchHref("/investors", { quarter });
 
   return (
     <main className={styles.page}>
@@ -53,6 +54,7 @@ export default async function InvestorsPage() {
           <h1 className={styles.title}>Investors</h1>
           <p className={styles.meta}>
             <span>Institutional investors tracked from their SEC Form 13F filings</span>
+            {quarter && <span>Researching {quarterLabel(quarter)} · <Link href="/investors">Use latest quarters</Link></span>}
           </p>
         </div>
       </header>
@@ -64,7 +66,7 @@ export default async function InvestorsPage() {
               Tracked investors
             </h2>
             <p className={styles.cardSubtitle}>
-              Each investor&apos;s latest reported quarter. Select a name to explore its portfolio.
+              {quarter ? `Reports for ${quarterLabel(quarter)}. Missing reports are marked as unavailable.` : "Each investor’s latest reported quarter."} Select a name to explore its portfolio.
             </p>
           </div>
           <p className={styles.cardMeta}>
@@ -76,7 +78,7 @@ export default async function InvestorsPage() {
         ) : (
           <div className={styles.tableScroll}>
             <table className={styles.table}>
-              <caption className={styles.visuallyHidden}>Tracked investors by group, with their latest reported quarter</caption>
+              <caption className={styles.visuallyHidden}>Tracked investors by group, {quarter ? quarterLabel(quarter) : "latest reported quarters"}</caption>
               <thead>
                 <tr>
                   <th scope="col">Investor</th>
@@ -89,7 +91,7 @@ export default async function InvestorsPage() {
               <tbody>
                 {SEGMENTS.map(({ segment, title, detail }) => {
                   const members = rows.filter((row) => row.investor.segment === segment)
-                    .sort((a, b) => (b.investor.latestValueUsd ?? 0) - (a.investor.latestValueUsd ?? 0));
+                    .sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
                   if (members.length === 0) return null;
                   return (
                     <Fragment key={title}>
@@ -98,26 +100,27 @@ export default async function InvestorsPage() {
                           {title} <span className={styles.groupDetail}>· {members.length} · {detail}</span>
                         </th>
                       </tr>
-                      {members.map(({ investor, positions }) => {
+                      {members.map(({ investor, positions, period, valueUsd }) => {
                         const largest = positions?.largest ?? null;
-                        const largestStock = largest?.cusip ? stocks[largest.cusip] : undefined;
+                        const largestStock = largest?.cusip && period ? stocks.get(period)?.[largest.cusip] : undefined;
+                        const from = `${listHref}#investor-${investor.slug}`;
                         return (
-                          <tr key={investor.id}>
+                          <tr key={investor.id} id={`investor-${investor.slug}`}>
                             <th scope="row" className={styles.security}>
-                              <Link href={`/investors/${investor.slug}`} className={styles.issuer}>
+                              <Link href={researchHref(`/investors/${investor.slug}`, { quarter, from })} className={styles.issuer}>
                                 {investor.name}
                               </Link>
-                              <span className={styles.securityClass}>{history(investor)}</span>
+                              <span className={styles.securityClass}>{history(investor, period)}</span>
                             </th>
                             <td className={styles.numeric}>
-                              {investor.latestValueUsd === null ? "—" : formatUsdCompact(investor.latestValueUsd)}
+                              {valueUsd === null ? "—" : formatUsdCompact(valueUsd)}
                             </td>
                             <td className={`${styles.numeric} ${styles.optional}`}>{positions ? formatNumber(positions.total) : "—"}</td>
                             <td className={`${styles.security} ${styles.wideOnly}`}>
                               {largest ? (
                                 <>
                                   {largestStock ? (
-                                    <Link href={`/stocks/${encodeURIComponent(largestStock.ticker)}`}>{largestStock.name}</Link>
+                                    <Link href={researchHref(`/stocks/${encodeURIComponent(largestStock.ticker)}`, { quarter: period ?? undefined, investor: investor.slug, from })}>{largestStock.name}</Link>
                                   ) : (
                                     <span>{largest.issuer}</span>
                                   )}
@@ -143,7 +146,7 @@ export default async function InvestorsPage() {
         <details className={styles.disclosure}>
           <summary>About reported values &amp; trends</summary>
           <p className={styles.cardSubtitle}>
-            Reported value is the market value of the 13F securities in each investor&apos;s latest reported quarter,
+            Reported value is the market value of the 13F securities in {quarter ? "the selected quarter" : "each investor’s latest reported quarter"},
             not an investment return. The trend shows reported value by quarter, each on its own scale.
           </p>
         </details>

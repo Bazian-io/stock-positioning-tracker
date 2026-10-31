@@ -1,0 +1,138 @@
+.searchForm {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 12px;
+  max-width: 760px;
+}
+
+.searchLabel {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.searchRow {
+  display: flex;
+  gap: 8px;
+}
+
+.searchRow input {
+  flex: 1 1 auto;
+  min-height: 48px;
+  font-size: 16px;
+}
+
+.searchRow button {
+  align-self: stretch;
+  min-height: 48px;
+}
+
+.results {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.resultList {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.resultList li + li {
+  border-top: 1px solid var(--border);
+}
+
+.resultLink {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 0;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  scroll-margin-top: 20px;
+}
+
+.resultLink:hover strong,
+.highlight h3 a:hover {
+  text-decoration: underline;
+}
+
+.highlights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.highlight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.manager {
+  font-size: 13px;
+}
+
+.changeLabel {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.highlight h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.highlight h3 a {
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.ticker {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.weight {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.weight strong {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 550;
+}
+
+.explore {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .highlights { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+  .results, .highlights { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 360px) {
+  .searchRow { flex-direction: column; }
+}

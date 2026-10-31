@@ -16,6 +16,8 @@ import {
 import { getStock, getStockOwnership, type StockPosition } from "@/lib/stock-data";
 import { describeChange, receivedNote, splitLabel } from "@/lib/change-description";
 import { STOCK_FILTERS, matchesStockFilter, stockOverview, type StockFilter } from "@/lib/stock-overview";
+import { ResearchReturn } from "@/components/research-return";
+import { detailReturnTarget, researchHref, returnTarget } from "@/lib/research";
 
 type StockPageProps = {
   params: Promise<{ ticker: string }>;
@@ -58,13 +60,17 @@ function optionsNote(options: StockPosition[]): string | null {
 
 // One page for every stock with a ticker, at /stocks/[ticker].
 export default async function StockPage({ params, searchParams }: StockPageProps) {
-  const [{ ticker: requestedTicker }, { quarter: requestedQuarter, investor: requestedInvestor, filter: requestedFilter }] = await Promise.all([params, searchParams]);
+  const [{ ticker: requestedTicker }, { quarter: requestedQuarter, investor: requestedInvestor, filter: requestedFilter, from, back }] = await Promise.all([params, searchParams]);
+  const returnTo = returnTarget(from)?.href;
+  const previousView = detailReturnTarget(back)?.href;
   const ticker = requestedTicker.toUpperCase();
   if (ticker !== requestedTicker) {
     const query = new URLSearchParams();
     if (typeof requestedQuarter === "string") query.set("quarter", requestedQuarter);
     if (typeof requestedInvestor === "string") query.set("investor", requestedInvestor);
     if (typeof requestedFilter === "string") query.set("filter", requestedFilter);
+    if (returnTo) query.set("from", returnTo);
+    if (previousView) query.set("back", previousView);
     redirect(`/stocks/${encodeURIComponent(ticker)}${query.size ? `?${query}` : ""}`);
   }
   const stock = await getStock(ticker);
@@ -200,13 +206,16 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   const chartTicks = ticks.map((tick) => ({ label: formatNumberAxis(tick), position: (tick / scaleMax) * 100 }));
 
   const filterQuery: Record<string, string> = filter === "all" ? {} : { filter };
-  const pageHref = (query: Record<string, string>) => `/stocks/${encodeURIComponent(stock.ticker)}?${new URLSearchParams({ ...filterQuery, ...query })}`;
-  const quarterQuery: Record<string, string> = isLatest ? {} : { quarter: selected };
+  if (returnTo) filterQuery.from = returnTo;
+  if (previousView) filterQuery.back = previousView;
+  const pageHref = (query: Record<string, string>) => `/stocks/${encodeURIComponent(stock.ticker)}?${new URLSearchParams({ quarter: latest, ...filterQuery, ...query })}`;
+  const quarterQuery: Record<string, string> = { quarter: selected };
   const filterHref = (selection: StockFilter) => `/stocks/${encodeURIComponent(stock.ticker)}?${new URLSearchParams({
-    ...quarterQuery, ...(chartInvestor ? { investor: chartInvestor.slug } : {}), ...(selection === "all" ? {} : { filter: selection }),
+    ...quarterQuery, ...(returnTo ? { from: returnTo } : {}), ...(previousView ? { back: previousView } : {}), ...(chartInvestor ? { investor: chartInvestor.slug } : {}), ...(selection === "all" ? {} : { filter: selection }),
   })}#holders`;
   const filterLabel = STOCK_FILTERS.find((option) => option.value === filter)!.label;
-  const investorHref = (slug: string, reported: boolean) => `/investors/${slug}${reported ? `?quarter=${selected}` : ""}`;
+  const stockView = detailReturnTarget(filterHref(filter))?.href;
+  const investorHref = (slug: string) => researchHref(`/investors/${slug}`, { quarter: selected, from: returnTo, back: stockView });
   const currentCusips = stock.cusips.filter((period) => period.validTo === null).map((period) => period.cusip);
   // Earlier CUSIPs, such as one replaced in a corporate action, or one that filers mistyped: "531229748, Q3 2023–Q3 2025".
   const otherCusips = stock.cusips.flatMap((period) => period.validTo === null ? [] : [
@@ -227,7 +236,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
     return (
       <tr key={row.investor.id} data-investor={row.investor.slug} data-change-kind={row.change.kind}>
         <th scope="row" className={`${styles.security} ${styles.wrapping}`}>
-          <Link href={investorHref(row.investor.slug, row.current.state !== "no-report")} className={styles.issuer}>
+          <Link href={investorHref(row.investor.slug)} className={styles.issuer}>
             {row.investor.name}
           </Link>
           {note && (
@@ -270,8 +279,9 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   return (
     <QuarterNavigation keep={{ ...filterQuery, ...(chartInvestor ? { investor: chartInvestor.slug } : {}) }}>
       <main className={styles.page}>
+        <ResearchReturn from={returnTo} back={previousView} />
         <nav className={styles.breadcrumb} aria-label="Breadcrumb">
-          <Link href="/stocks">Stocks</Link>
+          <Link href={researchHref("/stocks", { quarter: selected })}>Stocks</Link>
           <span aria-hidden="true">/</span>
           <span>{stock.name}</span>
         </nav>
@@ -391,7 +401,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                           {notHeldEither.map((row, i) => (
                             <Fragment key={row.investor.id}>
                               {i > 0 && ", "}
-                              <Link href={investorHref(row.investor.slug, true)}>{row.investor.name}</Link>
+                              <Link href={investorHref(row.investor.slug)}>{row.investor.name}</Link>
                             </Fragment>
                           ))}
                         </td>
@@ -411,7 +421,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                           {noReport.map((row, i) => (
                             <Fragment key={row.investor.id}>
                               {i > 0 && ", "}
-                              <Link href={investorHref(row.investor.slug, false)}>{row.investor.name}</Link>
+                              <Link href={investorHref(row.investor.slug)}>{row.investor.name}</Link>
                             </Fragment>
                           ))}
                         </td>

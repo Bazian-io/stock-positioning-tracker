@@ -4,6 +4,7 @@ import { getPortfolioChanges } from "@/lib/portfolio-changes-data";
 import { CHANGE_FILTERS, matchesChange, type ChangeFilter, type ComparisonQuarter, type PortfolioChange } from "@/lib/portfolio-changes";
 import { formatNumber, formatPercent, quarterLabel } from "@/lib/portfolio";
 import { previousQuarter, type QuarterHolding } from "@/lib/stock";
+import { detailReturnTarget, researchHref, returnTarget } from "@/lib/research";
 import styles from "./dashboard.module.css";
 
 const PAGE_SIZE = 25;
@@ -75,6 +76,7 @@ export async function PortfolioChanges({ investorId, slug, current, previous, fi
   const shown = filtered.slice(start, start + PAGE_SIZE);
   const label = CHANGE_FILTERS.find((option) => option.value === filter)!.label;
   const value = (weight: number | null) => weight === null ? "—" : formatPercent(weight);
+  const back = detailReturnTarget(href(filter, page))?.href;
 
   return (
     <section className={styles.card} aria-labelledby="changes">
@@ -127,7 +129,7 @@ export async function PortfolioChanges({ investorId, slug, current, previous, fi
                   <tr key={row.id} data-change-kind={row.category}>
                     <th scope="row" className={`${styles.security} ${styles.wrapping}`}>
                       {row.ticker ? (
-                        <Link href={`/stocks/${encodeURIComponent(row.ticker)}?${new URLSearchParams({ quarter: current.reportPeriod, investor: slug })}`} className={styles.issuer}>
+                        <Link href={researchHref(`/stocks/${encodeURIComponent(row.ticker)}`, { quarter: current.reportPeriod, investor: slug, from: returnTarget(query.from)?.href, back })} className={styles.issuer}>
                           {row.name}
                         </Link>
                       ) : <span className={styles.issuer}>{row.name}</span>}

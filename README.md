@@ -63,7 +63,14 @@ key reaches the browser. Public readers see only fully validated filings.
 **Web app**
 
 - One fixed light theme, with no theme selector or automatic dark mode.
-- Two research sections, Investors and Stocks, linked from the homepage and the main navigation.
+- Research homepage: unified stock/investor search and quarter-labelled highlights from active
+  managers with consecutive reports. Highlights reuse the dashboard comparison rules, exclude
+  corporate actions and uncertain comparisons, and rank one change per manager by its absolute
+  portfolio-weight shift. Coverage and selection are explained on the page; highlights load separately.
+- Two research sections, Investors and Stocks, plus unified search in the main navigation.
+  Selected quarters travel between research pages. Return links preserve search queries, list pages,
+  holdings filters and the previous stock overview. Missing investor reports have an explicit
+  unavailable state with access to the investor's other quarters.
 - Investors page: every investor in the database, grouped into asset managers, active managers and
   quantitative funds, with its latest reported value, number of positions, largest holding and a
   trend line of reported value by quarter.

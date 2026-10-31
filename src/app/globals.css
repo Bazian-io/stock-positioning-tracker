@@ -133,7 +133,7 @@ a {
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  max-width: 760px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: clamp(32px, 8vw, 72px) 24px;
 }

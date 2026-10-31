@@ -7,6 +7,9 @@ import { HoldingsTable, type TableLink } from "@/components/dashboard/holdings-t
 import { PendingFrame, QuarterNavigation, QuarterSelect } from "@/components/dashboard/quarter-navigation";
 import { ValueChart } from "@/components/dashboard/value-chart";
 import { PortfolioChanges, PortfolioChangesLoading } from "@/components/dashboard/portfolio-changes";
+import { UnavailableInvestorQuarter } from "@/components/dashboard/unavailable-quarter";
+import { ResearchReturn } from "@/components/research-return";
+import { detailReturnTarget, reportingQuarter, researchHref, returnTarget } from "@/lib/research";
 import { CHANGE_FILTERS } from "@/lib/portfolio-changes";
 import {
   POSITION_SORTS, axisTicks, formatDate, formatFilingDate, formatNumber, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact,
@@ -43,13 +46,17 @@ function filingRole(filing: QuarterFiling): string {
 
 // One dashboard for every investor in the database, at /investors/[slug].
 export default async function InvestorPage({ params, searchParams }: InvestorPageProps) {
-  const [{ slug }, { quarter: requested, holdings, page, q, sort: requestedSort, change, changePage }] = await Promise.all([params, searchParams]);
+  const [{ slug }, { quarter: requested, holdings, page, q, sort: requestedSort, change, changePage, from, back }] = await Promise.all([params, searchParams]);
+  const returnTo = returnTarget(from)?.href;
+  const previousView = detailReturnTarget(back)?.href;
+  const requestedPeriod = reportingQuarter(requested);
+  if (requested !== undefined && !requestedPeriod) notFound();
   const investor = await getInvestorBySlug(slug);
   if (!investor) notFound();
   const quarters = await getQuarterSummaries(investor.id);
   const latest = quarters.at(-1);
   const selected = requested === undefined ? latest : quarters.find((quarter) => quarter.reportPeriod === requested);
-  if (!latest || !selected) notFound();
+  if (!latest || !selected) return <UnavailableInvestorQuarter investor={investor} quarters={quarters} period={requestedPeriod} from={returnTo} back={previousView} />;
   const previous = quarters.find((quarter) => quarter.reportPeriod === previousQuarter(selected.reportPeriod));
   const changeFilter = CHANGE_FILTERS.find((option) => option.value === change)?.value ?? "changed";
   const changesPage = typeof changePage === "string" && /^[1-9]\d{0,5}$/.test(changePage) ? Number(changePage) : 1;
@@ -84,7 +91,9 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
   const pagePath = `/investors/${investor.slug}`;
   const dashboardHref = (view: { all?: boolean; page?: number; clear?: boolean } = {}) => {
     const search = new URLSearchParams();
-    if (!isLatest) search.set("quarter", selected.reportPeriod);
+    search.set("quarter", selected.reportPeriod);
+    if (returnTo) search.set("from", returnTo);
+    if (previousView) search.set("back", previousView);
     if (view.all) search.set("holdings", "all");
     if (query && !view.clear) search.set("q", query);
     if (sort !== POSITION_SORTS[0] && !view.clear) search.set("sort", sort.value);
@@ -110,6 +119,8 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
   const tableStatus = matching === 0 ? (query ? "No matching holdings" : "No holdings reported")
     : `${formatNumber(firstRank)}–${formatNumber(firstRank + positions.length - 1)} of ${formatNumber(matching)} ${query ? "matching " : ""}${matching === 1 ? "holding" : "holdings"}`;
   const keep: Record<string, string> = {};
+  if (returnTo) keep.from = returnTo;
+  if (previousView) keep.back = previousView;
   if (showAll) keep.holdings = "all";
   if (query) keep.q = query;
   if (sort !== POSITION_SORTS[0]) keep.sort = sort.value;
@@ -132,8 +143,9 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
   return (
     <QuarterNavigation keep={keep}>
       <main className={styles.page}>
+        <ResearchReturn from={returnTo} back={previousView} />
         <nav className={styles.breadcrumb} aria-label="Breadcrumb">
-          <Link href="/investors">Investors</Link>
+          <Link href={researchHref("/investors", { quarter: selected.reportPeriod })}>Investors</Link>
           <span aria-hidden="true">/</span>
           <span>{investor.name}</span>
         </nav>
@@ -168,7 +180,7 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
               <span>
                 Showing {label}. The latest reported quarter is {quarterLabel(latest.reportPeriod)}.
               </span>
-              <Link href={pagePath} scroll={false}>
+              <Link href={researchHref(pagePath, { quarter: latest.reportPeriod, from: returnTo, back: previousView })} scroll={false}>
                 View the latest quarter
               </Link>
             </p>
@@ -284,6 +296,8 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
             </div>
             <form key={`${selected.reportPeriod}:${query}:${sort.value}`} className={styles.tableControls} action={`${pagePath}#holdings`} role="search" aria-label="Search portfolio holdings">
               <input type="hidden" name="quarter" value={selected.reportPeriod} />
+              {returnTo && <input type="hidden" name="from" value={returnTo} />}
+              {previousView && <input type="hidden" name="back" value={previousView} />}
               <input type="hidden" name="holdings" value="all" />
               {changeFilter !== "changed" && <input type="hidden" name="change" value={changeFilter} />}
               {changesPage > 1 && <input type="hidden" name="changePage" value={changesPage} />}
@@ -324,6 +338,10 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
               status={tableStatus}
               pageLabel={showAll && pageCount > 1 ? `Page ${formatNumber(pageNumber)} of ${formatNumber(pageCount)}` : undefined}
               stocks={stocks}
+              quarter={selected.reportPeriod}
+              investorSlug={investor.slug}
+              from={returnTo}
+              back={detailReturnTarget(`${dashboardHref({ all: showAll, page: pageNumber })}#holdings`)?.href}
             />
           </section>
 

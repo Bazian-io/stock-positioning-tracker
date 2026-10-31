@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { formatNumber, formatPercent, formatUsd, formatUsdCompact, type Position } from "@/lib/portfolio";
 import type { StockLink } from "@/lib/stock-data";
+import { researchHref } from "@/lib/research";
 import styles from "./dashboard.module.css";
 
 const OPTION_LABELS: Record<string, string> = { put: "Put option", call: "Call option" };
@@ -17,13 +18,17 @@ type HoldingsTableProps = {
   status?: string; // e.g. "Positions 201–400 of 5,696".
   pageLabel?: string;
   stocks: Record<string, StockLink>; // Ticker and readable name by CUSIP, for positions with a stock page.
+  quarter: string;
+  investorSlug: string;
+  from?: string;
+  back?: string;
 };
 
 // Share bars are scaled to the quarter's largest position; the
 // percentages are shares of the quarter's total reported value.
 // Positions in an identified stock show the stock's readable name and ticker, with the name as filed on
 // hover; others show the name as filed.
-export function HoldingsTable({ positions, firstRank, largestShare, caption, links, status, pageLabel, stocks }: HoldingsTableProps) {
+export function HoldingsTable({ positions, firstRank, largestShare, caption, links, status, pageLabel, stocks, quarter, investorSlug, from, back }: HoldingsTableProps) {
   return (
     <>
       <div className={styles.tableScroll}>
@@ -49,7 +54,7 @@ export function HoldingsTable({ positions, firstRank, largestShare, caption, lin
                 <td className={styles.rank}>{formatNumber(firstRank + index)}</td>
                 <th scope="row" className={styles.security}>
                   {stock ? (
-                    <Link href={`/stocks/${encodeURIComponent(stock.ticker)}`} className={styles.issuer} title={`Filed as ${filed}`}>
+                    <Link href={researchHref(`/stocks/${encodeURIComponent(stock.ticker)}`, { quarter, investor: investorSlug, from, back })} className={styles.issuer} title={`Filed as ${filed}`}>
                       {stock.name}
                     </Link>
                   ) : (

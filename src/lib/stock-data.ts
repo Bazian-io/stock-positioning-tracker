@@ -159,7 +159,8 @@ export async function getStockPage(search: string, offset: number, limit: number
       "stocks by CUSIP",
     );
     const matches = new Map([...tickerMatches, ...nameMatches, ...listedNameMatches, ...byCusip].map((row) => [row.security_id, row]));
-    const sorted = [...matches.values()].sort(byTicker);
+    const exactTicker = text.toUpperCase().replace(/[./]/g, "-");
+    const sorted = [...matches.values()].sort((a, b) => Number(b.identifier_value === exactTicker) - Number(a.identifier_value === exactTicker) || byTicker(a, b));
     rows = sorted.slice(offset, offset + limit);
     total = sorted.length;
   }
