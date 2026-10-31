@@ -45,7 +45,7 @@ type Group = {
   unclear: Map<string, Unconfirmed>;
 };
 
-function groupPositions(positions: ComparisonPosition[], securities: ComparisonSecurity[], periods: string[]): Group[] {
+export function groupPositions(positions: ComparisonPosition[], securities: ComparisonSecurity[], periods: string[]): Group[] {
   const byCusip = new Map<string, ComparisonSecurity[]>();
   for (const security of securities) {
     for (const cusip of new Set(security.cusips.map((period) => period.cusip))) {
@@ -79,7 +79,7 @@ function groupPositions(positions: ComparisonPosition[], securities: ComparisonS
   return [...groups.values()];
 }
 
-function weight(holding: QuarterHolding, quarter: ComparisonQuarter | undefined): number | null {
+export function portfolioWeight(holding: QuarterHolding, quarter: ComparisonQuarter | undefined): number | null {
   if (!quarter || holding.state === "no-report" || holding.state === "unclear"
     || (holding.state === "not-held" && holding.confidentialOmissions)) return null;
   return quarter.valueUsd > 0 ? holding.valueUsd / quarter.valueUsd : 0;
@@ -150,7 +150,7 @@ export function portfolioChanges({ current, previous, positions, securities = []
       ticker: group.held.size ? group.security?.ticker ?? null : null,
       cusips: group.security?.cusips.map((period) => period.cusip) ?? [...group.cusips],
       previous: before, current: after,
-      previousWeight: weight(before, prior), currentWeight: weight(after, current), change, category, note,
+      previousWeight: portfolioWeight(before, prior), currentWeight: portfolioWeight(after, current), change, category, note,
     };
   }).sort((a, b) => Math.max(b.previousWeight ?? 0, b.currentWeight ?? 0) - Math.max(a.previousWeight ?? 0, a.currentWeight ?? 0)
     || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));

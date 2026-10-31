@@ -22,7 +22,7 @@ export function researchHref(path: string, query: Record<string, string | undefi
 
 const RETURN_LABELS: Record<string, string> = {
   "/": "Back to research updates", "/search": "Back to search results",
-  "/stocks": "Back to stocks", "/investors": "Back to investors",
+  "/stocks": "Back to stocks", "/investors": "Back to investors", "/compare": "Back to investor comparison",
 };
 
 // Only results pages can be return destinations. Detail links carry this one destination,
@@ -34,12 +34,18 @@ export function returnTarget(value: unknown): { href: string; label: string } | 
   const label = RETURN_LABELS[url.pathname];
   if (!label || url.origin !== "https://research.invalid") return undefined;
   const query: Record<string, string | undefined> = { quarter: reportingQuarter(url.searchParams.get("quarter")) };
-  if (url.pathname === "/search" || url.pathname === "/stocks") {
+  if (url.pathname === "/search" || url.pathname === "/stocks" || url.pathname === "/compare") {
     query.q = searchQuery(url.searchParams.get("q"));
     const page = resultPage(url.searchParams.get("page"));
     if (page > 1) query.page = String(page);
   }
-  const hash = /^#(?:research-updates|search-results|stock-list|tracked-investors|(?:stock|investor)-[a-zA-Z0-9.-]+)$/.test(url.hash) ? url.hash : "";
+  if (url.pathname === "/compare") {
+    for (const key of ["a", "b", "filter", "sort"]) {
+      const value = url.searchParams.get(key);
+      if (value && /^[a-z0-9-]{1,100}$/.test(value)) query[key] = value;
+    }
+  }
+  const hash = /^#(?:research-updates|search-results|stock-list|tracked-investors|comparison-holdings|(?:stock|investor)-[a-zA-Z0-9.-]+)$/.test(url.hash) ? url.hash : "";
   return { href: `${researchHref(url.pathname, query)}${hash}`, label };
 }
 

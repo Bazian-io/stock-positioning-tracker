@@ -57,6 +57,7 @@ export default async function InvestorsPage({ searchParams }: { searchParams: Pr
             {quarter && <span>Researching {quarterLabel(quarter)} · <Link href="/investors">Use latest quarters</Link></span>}
           </p>
         </div>
+        <Link href={researchHref("/compare", { quarter, from: listHref })} className={styles.pageLink}>Compare investors →</Link>
       </header>
 
       <section className={styles.card} aria-labelledby="tracked-investors">

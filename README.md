@@ -109,6 +109,13 @@ key reaches the browser. Public readers see only fully validated filings.
   Confidential omissions cannot establish a new position or exit, and an uncertain zero is marked in
   the table and chart instead of being presented as a confirmed absence. Activity counts show a dash
   when no reliable comparisons are available.
+- Investor comparison, `/compare`: choose two investors and a reporting quarter to compare shared
+  holdings, positions reported only by one investor, shares, values and full-portfolio weights.
+  The default quarter is the latest reported by both. Filters, security search, weight-gap sorting
+  and pagination keep the pair and quarter together; stock and investor links return to the same
+  comparison. Only long share positions are compared. Missing reports, confidential zeros and
+  uncertain identities cannot establish unique holdings, and weights describe positioning rather
+  than investment performance. All data access remains read-only.
 
 **Data checks and backups**
 

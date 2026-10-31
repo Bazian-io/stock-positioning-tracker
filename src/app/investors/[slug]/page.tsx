@@ -155,6 +155,10 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
             <h1 className={styles.title}>{investor.name}</h1>
             <p className={styles.meta}>
               <span>Holdings reported to the SEC on Form 13F</span>
+              <Link href={researchHref("/compare", {
+                a: investor.slug, quarter: selected.reportPeriod, from: returnTo,
+                back: detailReturnTarget(dashboardHref({ all: showAll, page: pageNumber }))?.href,
+              })}>Compare with another investor →</Link>
             </p>
             <details className={styles.disclosure}>
               <summary>Investor &amp; filing details</summary>

@@ -1,0 +1,63 @@
+.selection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(180px, 0.7fr) auto;
+  align-items: end;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.selection select {
+  min-width: 0;
+  min-height: 44px;
+}
+
+.selection > label {
+  min-width: 0;
+}
+
+.selection button {
+  align-self: end;
+  min-height: 44px;
+}
+
+.portfolios {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.portfolios .summary {
+  gap: 8px;
+  padding: 18px;
+}
+
+.portfolioValue {
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.positionWeight {
+  display: block;
+  font-weight: 600;
+}
+
+.table thead th {
+  max-width: 26ch;
+  white-space: normal;
+}
+
+.table th[scope="row"] {
+  max-width: 36ch;
+}
+
+@media (max-width: 900px) {
+  .selection { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .selection, .portfolios { grid-template-columns: minmax(0, 1fr); }
+}

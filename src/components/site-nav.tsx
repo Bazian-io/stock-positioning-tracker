@@ -12,6 +12,7 @@ const SECTIONS = [
   { href: "/search", label: "Search" },
   { href: "/investors", label: "Investors" },
   { href: "/stocks", label: "Stocks" },
+  { href: "/compare", label: "Compare" },
 ];
 
 function NavigationLinks({ pathname = "", quarter }: { pathname?: string; quarter?: string }) {

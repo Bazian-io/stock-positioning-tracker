@@ -41,6 +41,11 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
               →
             </span>
           </Link>
+          <Link href={researchHref("/compare", { quarter })} className="section-card">
+            <span className="section-name">Compare Investors</span>
+            <span className="section-detail">Compare two portfolios in the same quarter. Find shared holdings and see how their weights differ.</span>
+            <span className="section-arrow" aria-hidden="true">→</span>
+          </Link>
         </div>
       </main>
     </QuarterNavigation>

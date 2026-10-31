@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ResearchReturn } from "@/components/research-return";
 import { quarterLabel } from "@/lib/portfolio";
 import type { Investor, QuarterSummary } from "@/lib/portfolio-data";
-import { researchHref } from "@/lib/research";
+import { detailReturnTarget, researchHref } from "@/lib/research";
 import { QuarterNavigation, QuarterSelect } from "./quarter-navigation";
 import styles from "./dashboard.module.css";
 
@@ -34,6 +34,10 @@ export function UnavailableInvestorQuarter({ investor, quarters, period, from, b
           {latest && <Link href={researchHref(`/investors/${investor.slug}`, { quarter: latest.reportPeriod, from, back })}>
             View {quarterLabel(latest.reportPeriod)}, the latest reported quarter →
           </Link>}
+          <p className={styles.cardSubtitle}><Link href={researchHref("/compare", {
+            a: investor.slug, quarter: period, from,
+            back: detailReturnTarget(researchHref(`/investors/${investor.slug}`, { quarter: period, from }))?.href,
+          })}>Compare with another investor →</Link></p>
         </section>
       </main>
     </QuarterNavigation>
