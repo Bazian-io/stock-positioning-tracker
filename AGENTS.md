@@ -45,6 +45,16 @@ The Supabase database holds validated SEC data that took real effort to collect.
 - Run one collector process at a time. Before importing large filers, consider Supabase storage
   limits (see README "Known limitations").
 
+### Public version section
+
+- The bottom-of-page version comparison lives in [src/components/version-summary.tsx](src/components/version-summary.tsx)
+  and its CSS module. Update this section, including its version number, wording or listed improvements,
+  **only when the user gives specific permission to update this section**.
+- Routine feature work, fixes, documentation maintenance, or permission to commit, push or deploy
+  does not authorize updating it. Keep the approved section unchanged until that specific request.
+- Never generate or advance its version or notes automatically from package versions, commits,
+  tags, dates, builds or deployments. Keep the wording short, plain and understandable to non-technical readers.
+
 ### Git
 
 - Do not commit or push unless the user explicitly asks. One approval does not cover later commits.

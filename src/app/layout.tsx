@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
 import { QuarterHomeLink, SiteNav, SiteNavFallback } from "@/components/site-nav";
+import { VersionSummary } from "@/components/version-summary";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             Data from SEC EDGAR Form 13F filings. Reported values are historical disclosures, not
             investment performance or advice.
           </div>
+          <VersionSummary />
         </footer>
       </body>
     </html>

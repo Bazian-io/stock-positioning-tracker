@@ -202,6 +202,18 @@ corporate actions, 38 of them stock splits. No short-interest data yet.
 - **Availability.** Supabase's free plan pauses a project after a period without activity, which
   takes the live site offline until it is restored from the Supabase dashboard.
 
+## Public version notes
+
+The bottom of every page shows the current public version and a side-by-side comparison with the
+previous version, written in plain language. The approved version and notes live in
+[src/components/version-summary.tsx](src/components/version-summary.tsx).
+
+**Only update this section when the user gives specific permission to update it.** This includes
+the version number, comparison wording and listed improvements. Routine feature work, fixes,
+documentation maintenance, commits, pushes or deployments are not permission to update it.
+The section stays unchanged between approved updates; it is never generated or advanced from
+package versions, Git history, dates or build information. See [AGENTS.md](AGENTS.md#public-version-section).
+
 ## Run locally
 
 1. Install dependencies: `npm install`

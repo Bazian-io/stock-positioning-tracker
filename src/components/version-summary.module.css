@@ -1,0 +1,124 @@
+.section {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 28px 24px 32px;
+  border-top: 1px solid var(--border);
+}
+
+.header {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.header h2 {
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.comparison {
+  width: 100%;
+  table-layout: fixed;
+  border-spacing: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.comparison th,
+.comparison td {
+  width: 50%;
+  padding: 14px 18px;
+  text-align: left;
+  vertical-align: top;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.comparison thead th {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.comparison tbody th,
+.comparison tbody td {
+  border-top: 1px solid var(--border);
+}
+
+.previous {
+  background: var(--page);
+}
+
+.comparison .current {
+  border-left: 1px solid var(--border);
+  background: var(--accent-wash);
+}
+
+.topic {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .section {
+    padding: 24px 16px;
+  }
+
+  .comparison,
+  .comparison tbody {
+    display: block;
+  }
+
+  .comparison thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .comparison tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .comparison tbody tr + tr {
+    border-top: 1px solid var(--border);
+  }
+
+  .comparison tbody th,
+  .comparison tbody td {
+    width: auto;
+    padding: 14px 16px;
+    border: 0;
+  }
+
+  .comparison [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .current .topic {
+    display: none;
+  }
+}
