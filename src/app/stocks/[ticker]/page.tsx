@@ -10,11 +10,12 @@ import {
   quarterParts,
 } from "@/lib/portfolio";
 import {
-  EXCHANGE_NAMES, exactShareRatio, holdingSeries, identifiesStock, lastQuarterBefore, previousQuarter, quarterChange, receivedInQuarter,
+  EXCHANGE_NAMES, exactShareRatio, holdingSeries, identifiesStock, lastQuarterBefore, previousQuarter, quarterChange, receivedInQuarter, uncertainZero,
   type Change, type QuarterHolding, type Received, type Unconfirmed,
 } from "@/lib/stock";
 import { getStock, getStockOwnership, type StockPosition } from "@/lib/stock-data";
 import { describeChange, receivedNote, splitLabel } from "@/lib/change-description";
+import { STOCK_FILTERS, matchesStockFilter, stockOverview, type StockFilter } from "@/lib/stock-overview";
 
 type StockPageProps = {
   params: Promise<{ ticker: string }>;
@@ -37,6 +38,7 @@ const CHANGE_MARKERS: Partial<Record<Change["kind"], string>> = { increased: "�
 
 function stateLabel(holding: QuarterHolding): string {
   if (holding.state === "held") return `${formatNumber(holding.shares)} shares`;
+  if (uncertainZero(holding)) return "Uncertain";
   if (holding.state === "not-held") return "Reported, not held";
   if (holding.state === "unclear") return "Unclear";
   return "No report";
@@ -56,9 +58,15 @@ function optionsNote(options: StockPosition[]): string | null {
 
 // One page for every stock with a ticker, at /stocks/[ticker].
 export default async function StockPage({ params, searchParams }: StockPageProps) {
-  const [{ ticker: requestedTicker }, { quarter: requestedQuarter, investor: requestedInvestor }] = await Promise.all([params, searchParams]);
+  const [{ ticker: requestedTicker }, { quarter: requestedQuarter, investor: requestedInvestor, filter: requestedFilter }] = await Promise.all([params, searchParams]);
   const ticker = requestedTicker.toUpperCase();
-  if (ticker !== requestedTicker) redirect(`/stocks/${encodeURIComponent(ticker)}`);
+  if (ticker !== requestedTicker) {
+    const query = new URLSearchParams();
+    if (typeof requestedQuarter === "string") query.set("quarter", requestedQuarter);
+    if (typeof requestedInvestor === "string") query.set("investor", requestedInvestor);
+    if (typeof requestedFilter === "string") query.set("filter", requestedFilter);
+    redirect(`/stocks/${encodeURIComponent(ticker)}${query.size ? `?${query}` : ""}`);
+  }
   const stock = await getStock(ticker);
   if (!stock) notFound();
   const { investors, reports, positions, unconfirmed, conversions, convertedFrom } = await getStockOwnership(stock);
@@ -71,6 +79,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   const index = quarters.indexOf(selected);
   const label = quarterLabel(selected);
   const isLatest = selected === latest;
+  const filter = STOCK_FILTERS.find((option) => option.value === requestedFilter)?.value ?? "all";
 
   // Each investor's holding in every quarter: shares held long, separate from options.
   const series = new Map(investors.map((investor) => {
@@ -121,18 +130,26 @@ export default async function StockPage({ params, searchParams }: StockPageProps
     return {
       investor,
       current,
+      previous: holdings[index - 1],
       change: changeAt(investor.id, index),
       portfolioShare: portfolio && portfolio.valueUsd > 0 ? current.valueUsd / portfolio.valueUsd : 0,
       options: positions.filter((position) => position.investorId === investor.id && position.reportPeriod === selected && position.positionType !== "long"),
     };
   });
+  const counts = stockOverview(rows);
+  const comparable = rows.filter((row) => row.change.kind !== "not-comparable").length;
+  const comparisonFilters: StockFilter[] = ["increased", "decreased", "opened", "closed", "unchanged", "corporate-action"];
+  const countLabel = (selection: StockFilter) => comparable === 0 && comparisonFilters.includes(selection) ? "—" : formatNumber(counts[selection]);
+  const visible = rows.filter((row) => matchesStockFilter(row, filter));
   const holders = rows.filter((row) => row.current.state === "held").sort((a, b) => b.current.valueUsd - a.current.valueUsd);
+  const visibleHolders = visible.filter((row) => row.current.state === "held").sort((a, b) => b.current.valueUsd - a.current.valueUsd);
   // Investors that held none in either quarter are listed by name in one line; those that closed a
   // position, or whose zero is uncertain, keep a row.
-  const notHeldEither = rows.filter((row) => row.current.state === "not-held" && row.change.kind === "not-held" && !row.current.confidentialOmissions);
-  const notHeld = rows.filter((row) => row.current.state === "not-held" && !notHeldEither.includes(row));
-  const unclear = rows.filter((row) => row.current.state === "unclear");
-  const noReport = rows.filter((row) => row.current.state === "no-report");
+  const notHeldEither = filter === "all" ? visible.filter((row) => row.change.kind === "not-held" && !uncertainZero(row.current) && row.options.length === 0) : [];
+  const notHeld = visible.filter((row) => row.current.state === "not-held" && !uncertainZero(row.current) && !notHeldEither.includes(row));
+  const unclear = visible.filter((row) => row.current.state === "unclear" || uncertainZero(row.current));
+  const noReport = visible.filter((row) => row.current.state === "no-report");
+  const previousReports = reports.filter((report) => report.reportPeriod === previousQuarter(selected)).length;
 
   // The investor shown in the chart: chosen in the URL, otherwise the holder with the most reported quarters
   // (the larger holder on a tie), so the chart shows the longest history.
@@ -147,10 +164,11 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   const chartQuarters: ChartQuarter[] = chartSeries.map((holding, position) => {
     const quarter = quarterLabel(holding.reportPeriod);
     const held = holding.state === "held";
+    const reportedZero = holding.state === "not-held" && !uncertainZero(holding);
     const { splitRatio } = chartInvestor ? changeAt(chartInvestor.id, position) : quarterChange(holding, chartSeries[position - 1]);
     const descriptions: Record<QuarterHolding["state"], string> = {
       held: `${formatNumber(holding.shares)} shares reported`,
-      "not-held": "reported, not held",
+      "not-held": uncertainZero(holding) ? "holding uncertain due to confidential omissions" : "reported, not held",
       unclear: "holding unclear",
       "no-report": "no report in our data",
     };
@@ -158,9 +176,9 @@ export default async function StockPage({ params, searchParams }: StockPageProps
       reportPeriod: holding.reportPeriod,
       label: quarter,
       ...quarterParts(holding.reportPeriod),
-      valueLabel: held ? `${formatNumberCompact(holding.shares)} shares` : holding.state === "not-held" ? "0 shares" : stateLabel(holding),
+      valueLabel: held ? `${formatNumberCompact(holding.shares)} shares` : reportedZero ? "0 shares" : stateLabel(holding),
       // A missing report or an unclear holding is drawn as a full-height hatched column; its label sits above it.
-      height: held ? (holding.shares / scaleMax) * 100 : holding.state === "not-held" ? 0 : 100,
+      height: held ? (holding.shares / scaleMax) * 100 : reportedZero ? 0 : 100,
       description: `${quarter}: ${descriptions[holding.state]}`,
       details: held
         ? [
@@ -169,18 +187,25 @@ export default async function StockPage({ params, searchParams }: StockPageProps
           ...(splitRatio !== null ? [`Likely ${splitLabel(splitRatio)} stock split`] : []),
           ...(holding.received ? [`${holding.received.ownShares > 0 ? "Stock split" : "Received in corporate action"}: ${receivedNote(holding.received)}`] : []),
         ]
-        : holding.state === "not-held"
+        : reportedZero
           ? [`${quarter}: reported, not held`]
+          : uncertainZero(holding)
+            ? [`${quarter}: holding uncertain`, "This filing omitted confidential holdings; an absent position is not a confirmed zero"]
           : holding.unconfirmed
             ? [`${quarter}: holding unclear`, unclearNote(holding.unconfirmed, stock.ticker)]
             : [`${quarter}: no 13F report in our data`],
-      state: holding.state === "not-held" ? "zero" : held ? undefined : "missing",
+      state: reportedZero ? "zero" : held ? undefined : "missing",
     };
   });
   const chartTicks = ticks.map((tick) => ({ label: formatNumberAxis(tick), position: (tick / scaleMax) * 100 }));
 
-  const pageHref = (query: Record<string, string>) => `/stocks/${encodeURIComponent(stock.ticker)}?${new URLSearchParams(query)}`;
+  const filterQuery: Record<string, string> = filter === "all" ? {} : { filter };
+  const pageHref = (query: Record<string, string>) => `/stocks/${encodeURIComponent(stock.ticker)}?${new URLSearchParams({ ...filterQuery, ...query })}`;
   const quarterQuery: Record<string, string> = isLatest ? {} : { quarter: selected };
+  const filterHref = (selection: StockFilter) => `/stocks/${encodeURIComponent(stock.ticker)}?${new URLSearchParams({
+    ...quarterQuery, ...(chartInvestor ? { investor: chartInvestor.slug } : {}), ...(selection === "all" ? {} : { filter: selection }),
+  })}#holders`;
+  const filterLabel = STOCK_FILTERS.find((option) => option.value === filter)!.label;
   const investorHref = (slug: string, reported: boolean) => `/investors/${slug}${reported ? `?quarter=${selected}` : ""}`;
   const currentCusips = stock.cusips.filter((period) => period.validTo === null).map((period) => period.cusip);
   // Earlier CUSIPs, such as one replaced in a corporate action, or one that filers mistyped: "531229748, Q3 2023–Q3 2025".
@@ -191,26 +216,29 @@ export default async function StockPage({ params, searchParams }: StockPageProps
 
   const holderRow = (row: (typeof rows)[number]) => {
     const change = describeChange(row.change);
+    const confidentialComparison = uncertainZero(row.current) || (row.previous && uncertainZero(row.previous));
     const note = row.current.unconfirmed
       ? unclearNote(row.current.unconfirmed, stock.ticker)
       : row.current.state === "not-held" && row.current.confidentialOmissions
         ? "This report omitted some holdings under confidential treatment, so the zero is not certain"
-        : optionsNote(row.options);
+        : confidentialComparison
+          ? "The previous filing omitted confidential holdings, so a new position cannot be established from its apparent zero"
+          : optionsNote(row.options);
     return (
-      <tr key={row.investor.id}>
+      <tr key={row.investor.id} data-investor={row.investor.slug} data-change-kind={row.change.kind}>
         <th scope="row" className={`${styles.security} ${styles.wrapping}`}>
           <Link href={investorHref(row.investor.slug, row.current.state !== "no-report")} className={styles.issuer}>
             {row.investor.name}
           </Link>
           {note && (
             <details className={styles.rowDetails}>
-              <summary>{row.current.unconfirmed ? "Unclear holding" : row.current.state === "not-held" && row.current.confidentialOmissions ? "Zero is uncertain" : "Options reported"}</summary>
+              <summary>{row.current.unconfirmed ? "Unclear holding" : confidentialComparison ? "Confidential filing note" : "Options reported"}</summary>
               <p>{note}</p>
             </details>
           )}
         </th>
         <td className={styles.numeric} data-label="Reported shares">
-          {row.current.state === "held" ? formatNumber(row.current.shares) : row.current.state === "not-held" ? "0" : "—"}
+          {row.current.state === "held" ? formatNumber(row.current.shares) : uncertainZero(row.current) ? "Uncertain" : row.current.state === "not-held" ? "0" : "—"}
         </td>
         <td className={styles.numeric} data-label="Reported value" title={row.current.state === "held" ? formatUsd(row.current.valueUsd) : undefined}>
           {row.current.state === "held" ? formatUsdCompact(row.current.valueUsd) : "—"}
@@ -218,7 +246,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
         <td className={`${styles.numeric} ${styles.optional}`} data-label="Share of portfolio">
           {row.current.state === "held" ? formatPercent(row.portfolioShare) : "—"}
         </td>
-        <td className={`${styles.security} ${styles.changeCell}`} data-label={`Change from ${quarterLabel(previousQuarter(selected))}`}>
+        <td className={`${styles.security} ${styles.wrapping} ${styles.changeCell}`} data-label={`Change from ${quarterLabel(previousQuarter(selected))}`}>
           {row.current.state === "no-report" || row.current.state === "unclear" ? (
             <span className={styles.secondary}>
               {row.current.state === "unclear" ? "Not comparable: holding unclear" : `No ${label} report in our data`}
@@ -240,7 +268,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
   };
 
   return (
-    <QuarterNavigation keep={chartInvestor ? { investor: chartInvestor.slug } : {}}>
+    <QuarterNavigation keep={{ ...filterQuery, ...(chartInvestor ? { investor: chartInvestor.slug } : {}) }}>
       <main className={styles.page}>
         <nav className={styles.breadcrumb} aria-label="Breadcrumb">
           <Link href="/stocks">Stocks</Link>
@@ -291,78 +319,119 @@ export default async function StockPage({ params, searchParams }: StockPageProps
             <div className={styles.cardHeader}>
               <div>
                 <h2 id="holders" className={styles.cardTitle}>
-                  Tracked investors, {label}
+                  Investor positioning, {label}
                 </h2>
                 <p className={styles.cardSubtitle}>
-                  Reported at {formatDate(selected)}. These are tracked investors, not total institutional ownership.
+                  Quarter-end holdings at {formatDate(selected)}; changes from {quarterLabel(previousQuarter(selected))}.
+                  Only the investors tracked here are included, not total institutional ownership.
+                </p>
+                <p className={styles.cardSubtitle}>
+                  Share changes can be compared for {comparable} of {rows.length} tracked investors.
                 </p>
               </div>
             </div>
+            <nav className={`${styles.changeSummary} ${styles.stockSummary}`} aria-label="Stock positioning summary">
+              {STOCK_FILTERS.filter((option) => option.primary).map((option) => (
+                <Link key={option.value} href={filterHref(option.value)} scroll={false} className={styles.changeTile} aria-current={filter === option.value ? "true" : undefined}>
+                  <span>{option.label}</span>
+                  <strong>{countLabel(option.value)}</strong>
+                </Link>
+              ))}
+            </nav>
+            <nav className={styles.changeFilters} aria-label="Investor group filters">
+              {STOCK_FILTERS.filter((option) => !option.primary).map((option) => (
+                <Link key={option.value} href={filterHref(option.value)} scroll={false} className={styles.pageLink} aria-current={filter === option.value ? "true" : undefined}>
+                  {option.label} <span>{countLabel(option.value)}</span>
+                </Link>
+              ))}
+            </nav>
             <ul className={styles.holderCounts} aria-label="Investor reporting coverage">
-              <li><strong>{holders.length}</strong> holding</li>
-              <li><strong>{notHeld.length + notHeldEither.length}</strong> reported without it</li>
-              {unclear.length > 0 && <li><strong>{unclear.length}</strong> unclear</li>}
-              <li><strong>{noReport.length}</strong> no report</li>
+              <li><strong>{rows.length - counts["no-report"]}/{rows.length}</strong> reported for {label}</li>
+              <li><strong>{previousReports}/{rows.length}</strong> reported for {quarterLabel(previousQuarter(selected))}</li>
             </ul>
-            <div className={styles.tableScroll}>
-              <table className={`${styles.table} ${styles.holderTable}`} role="table">
-                <caption className={styles.visuallyHidden}>
-                  Tracked investors&apos; reported {stock.ticker} holdings, {label}
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Investor</th>
-                    <th scope="col" className={styles.numeric}>Reported shares</th>
-                    <th scope="col" className={styles.numeric}>Reported value</th>
-                    <th scope="col" className={`${styles.numeric} ${styles.optional}`}>Share of portfolio</th>
-                    <th scope="col">Change from {quarterLabel(previousQuarter(selected))}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {holders.map(holderRow)}
-                  {notHeld.length + notHeldEither.length > 0 && (
-                    <tr className={styles.groupRow}>
-                      <th scope="colgroup" colSpan={5}>Reported for {label}, without {stock.ticker}</th>
+            <p className={styles.note}>
+              Reported share changes are not proof of trades. Corporate actions and uncertain comparisons have their own groups.
+            </p>
+            <p className={styles.cardMeta} role="status">{filterLabel} · {visible.length} of {rows.length} tracked investors</p>
+            {visible.length === 0 ? (
+              <p className={styles.emptyState}>
+                {comparable === 0 && comparisonFilters.includes(filter)
+                  ? `No reliable share-count comparisons are available for ${label}. Check the reporting gaps and unclear holdings above.`
+                  : <>No tracked investors match &ldquo;{filterLabel}&rdquo; for {label}.</>}
+              </p>
+            ) : (
+              <div className={styles.tableScroll}>
+                <table className={`${styles.table} ${styles.holderTable}`} role="table">
+                  <caption className={styles.visuallyHidden}>
+                    {filterLabel}: tracked investors&apos; reported {stock.ticker} holdings, {label}
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Investor</th>
+                      <th scope="col" className={styles.numeric}>Reported shares</th>
+                      <th scope="col" className={styles.numeric}>Reported value</th>
+                      <th scope="col" className={`${styles.numeric} ${styles.optional}`}>Share of portfolio</th>
+                      <th scope="col">Change from {quarterLabel(previousQuarter(selected))}</th>
                     </tr>
-                  )}
-                  {notHeld.map(holderRow)}
-                  {notHeldEither.length > 0 && (
-                    <tr className={styles.namesRow}>
-                      <td colSpan={5}>
-                        <span className={styles.namesLabel}>
-                          Held none in {label} or {quarterLabel(previousQuarter(selected))} ({notHeldEither.length}):
-                        </span>{" "}
-                        {notHeldEither.map((row, i) => (
-                          <Fragment key={row.investor.id}>
-                            {i > 0 && ", "}
-                            <Link href={investorHref(row.investor.slug, true)}>{row.investor.name}</Link>
-                          </Fragment>
-                        ))}
-                      </td>
-                    </tr>
-                  )}
-                  {unclear.length > 0 && (
-                    <tr className={styles.groupRow}>
-                      <th scope="colgroup" colSpan={5}>Reported for {label}, holding unclear</th>
-                    </tr>
-                  )}
-                  {unclear.map(holderRow)}
-                  {noReport.length > 0 && (
-                    <tr className={styles.namesRow}>
-                      <td colSpan={5}>
-                        <span className={styles.namesLabel}>No {label} report in our data, so holding unknown ({noReport.length}):</span>{" "}
-                        {noReport.map((row, i) => (
-                          <Fragment key={row.investor.id}>
-                            {i > 0 && ", "}
-                            <Link href={investorHref(row.investor.slug, false)}>{row.investor.name}</Link>
-                          </Fragment>
-                        ))}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {visibleHolders.map(holderRow)}
+                    {notHeld.length + notHeldEither.length > 0 && (
+                      <tr className={styles.groupRow}>
+                        <th scope="colgroup" colSpan={5}>Reported for {label}, without {stock.ticker}</th>
+                      </tr>
+                    )}
+                    {notHeld.map(holderRow)}
+                    {notHeldEither.length > 0 && (
+                      <tr className={styles.namesRow}>
+                        <td colSpan={5}>
+                          <span className={styles.namesLabel}>
+                            Held none in {label} or {quarterLabel(previousQuarter(selected))} ({notHeldEither.length}):
+                          </span>{" "}
+                          {notHeldEither.map((row, i) => (
+                            <Fragment key={row.investor.id}>
+                              {i > 0 && ", "}
+                              <Link href={investorHref(row.investor.slug, true)}>{row.investor.name}</Link>
+                            </Fragment>
+                          ))}
+                        </td>
+                      </tr>
+                    )}
+                    {unclear.length > 0 && (
+                      <tr className={styles.groupRow}>
+                        <th scope="colgroup" colSpan={5}>Reported for {label}, holding unclear or confidential</th>
+                      </tr>
+                    )}
+                    {unclear.map(holderRow)}
+                    {filter !== "all" && noReport.map(holderRow)}
+                    {filter === "all" && noReport.length > 0 && (
+                      <tr className={styles.namesRow}>
+                        <td colSpan={5}>
+                          <span className={styles.namesLabel}>No {label} report in our data, so holding unknown ({noReport.length}):</span>{" "}
+                          {noReport.map((row, i) => (
+                            <Fragment key={row.investor.id}>
+                              {i > 0 && ", "}
+                              <Link href={investorHref(row.investor.slug, false)}>{row.investor.name}</Link>
+                            </Fragment>
+                          ))}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <details className={styles.disclosure}>
+              <summary>How the overview counts work</summary>
+              <p className={styles.cardSubtitle}>
+                Holding counts confirmed long share positions in this quarter. Changes require comparable reports for
+                both quarters. Splits and shares received in corporate actions are counted separately; options are
+                shown in notes and do not count as shares held. Unclear includes uncertain identifiers and confidential
+                omissions. No comparison means the previous report is missing; No report means this quarter is missing.
+                Groups can overlap: an investor can be holding shares while its change is unknown.
+                A dash in an activity count means no reliable comparisons are available.
+              </p>
+            </details>
           </section>
 
           <section className={styles.card} aria-labelledby="share-history">

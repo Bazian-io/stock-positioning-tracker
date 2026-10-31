@@ -95,6 +95,13 @@ key reaches the browser. Public readers see only fully validated filings.
   the company's announcement is labelled as a stock split, and shares received in a recorded
   corporate action (a merger or reclassification) are labelled as received. Holdings in
   dashboards link to stock pages, and stock pages link back to the dashboards.
+- Stock overviews summarize holders and reported increases, reductions, new positions and exits.
+  Summary cards filter the investor table, with additional groups for corporate actions, unchanged
+  positions, reported zeros, uncertain holdings and missing reports. Counts cover all tracked investors
+  regardless of the filter; the selected quarter, filter and chart investor stay together when navigating.
+  Confidential omissions cannot establish a new position or exit, and an uncertain zero is marked in
+  the table and chart instead of being presented as a confirmed absence. Activity counts show a dash
+  when no reliable comparisons are available.
 
 **Data checks and backups**
 

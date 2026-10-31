@@ -18,6 +18,10 @@ export type QuarterHolding = {
   received: Received | null; // Shares received in a corporate action during the quarter, when held.
 };
 
+export function uncertainZero(holding: QuarterHolding): boolean {
+  return holding.state === "not-held" && holding.confidentialOmissions;
+}
+
 // A corporate action in which holders of another security received shares of the stock at a fixed
 // ratio (Sirius XM's September 2024 merger: 0.1 new share for each Sirius XM share).
 export type Conversion = { fromCusip: string; sharesPerShare: number; effectiveDate: string; description: string };
@@ -167,6 +171,8 @@ export function quarterChange(current: QuarterHolding, previous: QuarterHolding 
   if (current.state === "no-report" || current.state === "unclear") return notComparable(current.reportPeriod, current.state);
   if (!previous || previous.reportPeriod !== previousPeriod || previous.state === "no-report") return notComparable(previousPeriod, "no-report");
   if (previous.state === "unclear") return notComparable(previousPeriod, "unclear");
+  if (uncertainZero(current)) return notComparable(current.reportPeriod, "unclear");
+  if (uncertainZero(previous)) return notComparable(previousPeriod, "unclear");
   if (current.received) {
     // Received in a corporate action: the change beyond the shares received. Shares of the stock itself
     // that were converted (a split) are replaced by what they became.

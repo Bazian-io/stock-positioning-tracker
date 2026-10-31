@@ -126,8 +126,7 @@ export function portfolioChanges({ current, previous, positions, securities = []
     let change = quarterChange(after, before, confirmations.get(group.id));
     let note: string | undefined;
     const uncertainZero = [before, after].find((holding) => holding.state === "not-held" && holding.confidentialOmissions);
-    if (uncertainZero && change.kind !== "not-comparable") {
-      change = { ...change, kind: "not-comparable", shares: 0, fraction: null, blocker: { reason: "unclear", reportPeriod: uncertainZero.reportPeriod } };
+    if (uncertainZero && change.blocker?.reason === "unclear") {
       note = "This filing omits confidential holdings, so the apparent zero is uncertain.";
     }
     if (group.unclear.size && change.kind === "not-comparable") {
