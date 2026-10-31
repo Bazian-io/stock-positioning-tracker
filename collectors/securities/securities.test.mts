@@ -84,7 +84,7 @@ test("a CUSIP and ticker are added only when OpenFIGI, SEC, Nasdaq's directory a
   const { plan, problems } = planSecurity(evidence("037833100", "AAPL"), "2026-10-29", null);
   assert.deepEqual(problems, []);
   assert.deepEqual(plan, {
-    security: { issuer_name: "Apple Inc.", share_class: null, security_type: "common_stock" },
+    security: { issuer_name: "Apple Inc.", share_class: null, security_type: "common_stock", listing_name: "Apple Inc. - Common Stock" },
     identifiers: [
       { identifier_type: "cusip", identifier_value: "037833100", namespace: "", valid_from: "2021-09-30", source_reference: filings.firstSourceUrl },
       { identifier_type: "ticker", identifier_value: "AAPL", namespace: "XNAS", valid_from: "2026-10-29", source_reference: NASDAQ_LISTED_URL },

@@ -8,9 +8,9 @@ They require PostgreSQL 15 or newer and the standard Supabase `anon`,
 
 | Table | Purpose |
 | --- | --- |
-| `investors` | Tracked filing managers, identified by zero-padded 10-digit CIKs, with a permanent URL `slug` assigned when each is added. |
+| `investors` | Tracked filing managers, identified by zero-padded 10-digit CIKs, with a permanent URL `slug` assigned when each is added, an optional short `display_name` for pages and a `segment` (asset_manager, active_manager or quantitative) that groups the Investors page. |
 | `investor_ciks` | Every CIK an investor has filed under, e.g. before and after a reorganization; each CIK belongs to one investor, optionally only from a given quarter (`first_report_period`). |
-| `securities` | Stable internal identities for security/share classes and the short-interest watchlist flag. |
+| `securities` | Stable internal identities for security/share classes and the short-interest watchlist flag, with the `listing_name` from Nasdaq's directory that pages shorten to a readable name. |
 | `security_identifiers` | Verified CUSIP, ticker, FIGI and provider-symbol mappings with validity periods. |
 | `security_conversions` | Official ratios from corporate actions: holders of one CUSIP received shares of a stock (Sirius XM's 2024 merger: 0.1 new share per old share), including stock splits from the stock's own CUSIP (NVIDIA's 2024 split: 10 per share). Holdings are not adjusted. |
 | `filings` | SEC filing metadata, amendment links, source evidence, summary totals and validation state. |

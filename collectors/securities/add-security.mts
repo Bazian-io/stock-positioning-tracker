@@ -10,6 +10,7 @@
 //        npm run add:security -- --conversion 82968B103 --ticker SIRI --ratio 0.1 --date 2024-09-09 --description <text> --source <official URL> [--dry-run]
 //        npm run add:security -- --conversion 67066G104 --ticker NVDA --ratio 10 --date 2024-06-10 --description <text> --source <official URL> --split [--dry-run]
 //        npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]
+//        npm run add:security -- --listing-names [--dry-run]
 import { parseArgs } from "node:util";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { lastQuarterBefore, nextQuarter } from "../../src/lib/stock.ts";
@@ -375,6 +376,44 @@ async function addConversion(
   console.log(`Recorded the ${values.split ? "stock split" : "conversion"} of ${fromCusip} into ${ticker}.`);
 }
 
+// Records each stock's name in Nasdaq's directory of US-listed securities, by its current ticker, for
+// pages to show a readable name ("Bank of America Corporation Common Stock" → "Bank of America"). Names
+// that changed in the directory are updated; the names as filed are not touched.
+async function addListingNames(db: SupabaseClient, dryRun: boolean) {
+  const [tickers, securities, directory] = await Promise.all([
+    loadAll<{ security_id: string; identifier_value: string; valid_from: string; valid_to: string | null }>((from, to) => db.from("security_identifiers")
+      .select("security_id, identifier_value, valid_from, valid_to").eq("identifier_type", "ticker").order("id").range(from, to), "Read tickers"),
+    loadAll<{ id: string; issuer_name: string; listing_name: string | null }>((from, to) => db.from("securities")
+      .select("id, issuer_name, listing_name").order("id").range(from, to), "Read securities"),
+    listings(),
+  ]);
+  const date = today();
+  const currentTicker = new Map(tickers.filter((row) => row.valid_from <= date && (row.valid_to === null || date < row.valid_to))
+    .map((row) => [row.security_id, row.identifier_value]));
+  const changes: { id: string; ticker: string; from: string | null; to: string }[] = [];
+  const missing: string[] = [];
+  for (const security of securities) {
+    const ticker = currentTicker.get(security.id);
+    const name = ticker ? directory.get(ticker)?.name.trim() : undefined;
+    if (!ticker || !name) missing.push(`  ${(ticker ?? "(no ticker)").padEnd(8)}${security.issuer_name}`);
+    else if (name !== security.listing_name) changes.push({ id: security.id, ticker, from: security.listing_name, to: name });
+  }
+  console.log(`Listing names to record (${changes.length} of ${securities.length} stocks):`);
+  for (const change of changes.slice(0, 20)) console.log(`  ${change.ticker.padEnd(8)}${change.from ? `${change.from} → ` : ""}${change.to}`);
+  if (changes.length > 20) console.log(`  … and ${changes.length - 20} more`);
+  if (missing.length > 0) console.log(`\nNot in Nasdaq's directory, so their pages keep the name as identified (${missing.length}):\n${missing.join("\n")}`);
+  if (dryRun || changes.length === 0) {
+    console.log(dryRun ? "\nDry run: database not changed." : "\nNothing changed.");
+    return;
+  }
+  // A few at a time, so the database is not flooded with thousands of requests at once.
+  for (let i = 0; i < changes.length; i += 10) {
+    await Promise.all(changes.slice(i, i + 10).map((change) =>
+      must(db.from("securities").update({ listing_name: change.to }).eq("id", change.id), "Record listing name")));
+  }
+  console.log(`\nRecorded ${changes.length} listing names.`);
+}
+
 // Moves recorded CUSIPs' start dates back to the earliest quarter our filings report them, after older
 // quarters have been imported.
 // confirmedNames: CUSIPs whose filers used a name the company had before a rename, checked by a person.
@@ -427,6 +466,7 @@ async function main() {
       date: { type: "string" },
       description: { type: "string" },
       "extend-windows": { type: "boolean", default: false },
+      "listing-names": { type: "boolean", default: false },
       "stated-one-for-one": { type: "boolean", default: false },
       split: { type: "boolean", default: false },
       "split-ratio": { type: "string" },
@@ -440,9 +480,11 @@ async function main() {
     + "       npm run add:security -- --alias <mistyped CUSIP> --ticker <TICKER> [--dry-run]\n"
     + "       npm run add:security -- --predecessor <old CUSIP> --ticker <TICKER> --until <conversion date> --source <official URL> [--stated-one-for-one | --split-ratio <shares per share>] [--source-names-cusips] [--dry-run]\n"
     + "       npm run add:security -- --conversion <CUSIP> --ticker <TICKER> --ratio <shares per share> --date <date> --description <text> --source <official URL> [--split] [--dry-run]\n"
-    + "       npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]";
+    + "       npm run add:security -- --extend-windows [--confirm-names <CUSIP>,…] [--dry-run]\n"
+    + "       npm run add:security -- --listing-names [--dry-run]";
   const db = () => connect(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SECRET_KEY"));
-  const modes = [values.investor, values.cusip, values.alias, values.predecessor, values.conversion, values["extend-windows"] || undefined]
+  const modes = [values.investor, values.cusip, values.alias, values.predecessor, values.conversion, values["extend-windows"] || undefined,
+    values["listing-names"] || undefined]
     .filter((mode) => mode !== undefined);
   if (modes.length !== 1) throw new Error(usage);
   if (values.investor && !values.ticker) {
@@ -461,6 +503,8 @@ async function main() {
     await addConversion(db(), values.conversion.trim().toUpperCase(), normalizeTicker(values.ticker), {
       ratio: values.ratio.trim(), date: values.date.trim(), description: values.description, source: values.source.trim(), split: values.split,
     }, values["dry-run"]);
+  } else if (values["listing-names"] && !values.ticker && !values.top) {
+    await addListingNames(db(), values["dry-run"]);
   } else if (values["extend-windows"] && !values.ticker && !values.top) {
     const confirmed = (values["confirm-names"] ?? "").split(",").map((cusip) => cusip.trim().toUpperCase()).filter(Boolean);
     await extendWindows(db(), values["dry-run"], confirmed);

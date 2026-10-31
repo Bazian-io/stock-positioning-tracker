@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { Fragment } from "react";
 import styles from "@/components/dashboard/dashboard.module.css";
 import { LinkSelect, PendingFrame, QuarterNavigation, QuarterSelect } from "@/components/dashboard/quarter-navigation";
 import { ValueChart, type ChartQuarter } from "@/components/dashboard/value-chart";
@@ -29,6 +30,9 @@ export async function generateMetadata({ params }: StockPageProps): Promise<Meta
 }
 
 const OPTION_LABELS: Record<string, string> = { put: "put options", call: "call options" };
+
+// The direction of a change, beside its label.
+const CHANGE_MARKERS: Partial<Record<Change["kind"], string>> = { increased: "▲", opened: "▲", decreased: "▼", closed: "▼" };
 
 // "20-for-1" or "1-for-10".
 function splitLabel(ratio: number): string {
@@ -179,7 +183,10 @@ export default async function StockPage({ params, searchParams }: StockPageProps
     };
   });
   const holders = rows.filter((row) => row.current.state === "held").sort((a, b) => b.current.valueUsd - a.current.valueUsd);
-  const notHeld = rows.filter((row) => row.current.state === "not-held");
+  // Investors that held none in either quarter are listed by name in one line; those that closed a
+  // position, or whose zero is uncertain, keep a row.
+  const notHeldEither = rows.filter((row) => row.current.state === "not-held" && row.change.kind === "not-held" && !row.current.confidentialOmissions);
+  const notHeld = rows.filter((row) => row.current.state === "not-held" && !notHeldEither.includes(row));
   const unclear = rows.filter((row) => row.current.state === "unclear");
   const noReport = rows.filter((row) => row.current.state === "no-report");
 
@@ -247,7 +254,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
         : optionsNote(row.options);
     return (
       <tr key={row.investor.id}>
-        <th scope="row" className={styles.security}>
+        <th scope="row" className={`${styles.security} ${styles.wrapping}`}>
           <Link href={investorHref(row.investor.slug, row.current.state !== "no-report")} className={styles.issuer}>
             {row.investor.name}
           </Link>
@@ -269,7 +276,12 @@ export default async function StockPage({ params, searchParams }: StockPageProps
             </span>
           ) : (
             <>
-              <span>{change.label}</span>
+              <span>
+                {CHANGE_MARKERS[row.change.kind] && (
+                  <span className={styles.changeMarker} aria-hidden="true">{CHANGE_MARKERS[row.change.kind]}</span>
+                )}
+                {change.label}
+              </span>
               {change.detail && <span className={styles.securityClass}>{change.detail}</span>}
             </>
           )}
@@ -293,6 +305,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
               {stock.name} <span className={styles.secondary}>{stock.ticker}</span>
             </h1>
             <p className={styles.meta}>
+              {stock.companyName && <span>{stock.companyName}</span>}
               <span>{stock.ticker} · {EXCHANGE_NAMES[stock.exchange] ?? stock.exchange}</span>
               <span>{kind}</span>
               {currentCusips.length > 0 && <span>CUSIP {currentCusips.join(", ")}</span>}
@@ -332,7 +345,7 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                 </p>
               </div>
               <p className={styles.cardMeta}>
-                {holders.length} holding · {notHeld.length} reported without it
+                {holders.length} holding · {notHeld.length + notHeldEither.length} reported without it
                 {unclear.length > 0 ? ` · ${unclear.length} unclear` : ""} · {noReport.length} no report
               </p>
             </div>
@@ -352,12 +365,27 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                 </thead>
                 <tbody>
                   {holders.map(holderRow)}
-                  {notHeld.length > 0 && (
+                  {notHeld.length + notHeldEither.length > 0 && (
                     <tr className={styles.groupRow}>
                       <th scope="colgroup" colSpan={5}>Reported for {label}, without {stock.ticker}</th>
                     </tr>
                   )}
                   {notHeld.map(holderRow)}
+                  {notHeldEither.length > 0 && (
+                    <tr className={styles.namesRow}>
+                      <td colSpan={5}>
+                        <span className={styles.namesLabel}>
+                          Held none in {label} or {quarterLabel(previousQuarter(selected))} ({notHeldEither.length}):
+                        </span>{" "}
+                        {notHeldEither.map((row, i) => (
+                          <Fragment key={row.investor.id}>
+                            {i > 0 && ", "}
+                            <Link href={investorHref(row.investor.slug, true)}>{row.investor.name}</Link>
+                          </Fragment>
+                        ))}
+                      </td>
+                    </tr>
+                  )}
                   {unclear.length > 0 && (
                     <tr className={styles.groupRow}>
                       <th scope="colgroup" colSpan={5}>Reported for {label}, holding unclear</th>
@@ -365,11 +393,18 @@ export default async function StockPage({ params, searchParams }: StockPageProps
                   )}
                   {unclear.map(holderRow)}
                   {noReport.length > 0 && (
-                    <tr className={styles.groupRow}>
-                      <th scope="colgroup" colSpan={5}>No {label} report in our data: holding unknown</th>
+                    <tr className={styles.namesRow}>
+                      <td colSpan={5}>
+                        <span className={styles.namesLabel}>No {label} report in our data, so holding unknown ({noReport.length}):</span>{" "}
+                        {noReport.map((row, i) => (
+                          <Fragment key={row.investor.id}>
+                            {i > 0 && ", "}
+                            <Link href={investorHref(row.investor.slug, false)}>{row.investor.name}</Link>
+                          </Fragment>
+                        ))}
+                      </td>
                     </tr>
                   )}
-                  {noReport.map(holderRow)}
                 </tbody>
               </table>
             </div>

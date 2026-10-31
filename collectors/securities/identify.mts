@@ -202,7 +202,7 @@ export type PlannedIdentifier = {
 };
 
 export type PlannedSecurity = {
-  security: { issuer_name: string; share_class: string | null; security_type: string };
+  security: { issuer_name: string; share_class: string | null; security_type: string; listing_name: string | null };
   identifiers: PlannedIdentifier[];
 };
 
@@ -237,6 +237,7 @@ export function planSecurity(evidence: Evidence, today: string, shareClass: stri
         issuer_name: sec.name.replace(/\s*\/(?:[A-Z]{2,3}\/?)?$/, ""), // without SEC's tag ("MOODYS CORP /DE/", "LENNAR CORP /NEW/")
         share_class: shareClass,
         security_type: figi.securityType.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+        listing_name: listing?.name.trim() || null, // As in Nasdaq's directory; pages shorten it.
       },
       identifiers: [
         { identifier_type: "cusip", identifier_value: cusip, namespace: "", valid_from: filings.firstPeriod, source_reference: filings.firstSourceUrl },

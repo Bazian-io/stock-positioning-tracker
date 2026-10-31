@@ -120,8 +120,18 @@ NYSE, NYSE American, NYSE Arca, Cboe BZX and IEX are supported; the Texas Stock 
 It then adds a `securities` row and two `security_identifiers`: the CUSIP, valid from the earliest
 quarter our filings report it (that filing is the evidence), and the ticker on its exchange's MIC,
 valid from the day it was checked. Each share class has its own CUSIP and ticker, so classes stay
-separate; with `--investor` the class comes from OpenFIGI's name ("ALPHABET INC-CL A"). Holdings
-themselves are not changed. A CUSIP or ticker that is already recorded is left as it is.
+separate; with `--investor` the class comes from OpenFIGI's name ("ALPHABET INC-CL A"). The stock's
+name in Nasdaq's directory ("Bank of America Corporation Common Stock") is recorded as its
+`listing_name`; pages shorten it to "Bank of America". Holdings themselves are not changed. A CUSIP or
+ticker that is already recorded is left as it is.
+
+```sh
+npm run add:security -- --listing-names --dry-run   # record or update every stock's name in Nasdaq's directory
+```
+
+`--listing-names` looks up each stock's current ticker in Nasdaq's directory and records the name for
+stocks added before names were recorded, or whose listed name changed. Stocks Nasdaq does not list
+keep the name they were identified with.
 
 `--investor` takes the investor's long share positions (not options or bonds), largest first by the
 largest value reported in any quarter; `--top` keeps that many. It looks up OpenFIGI without an API

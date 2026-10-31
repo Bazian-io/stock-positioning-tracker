@@ -12,7 +12,7 @@ import {
 import {
   getInvestorBySlug, getPositions, getQuarterFilings, getQuarterSummaries, type QuarterFiling,
 } from "@/lib/portfolio-data";
-import { getStockTickers } from "@/lib/stock-data";
+import { getStockLinks } from "@/lib/stock-data";
 
 type InvestorPageProps = {
   params: Promise<{ slug: string }>;
@@ -55,11 +55,12 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
     getQuarterFilings(investor, selected.reportPeriod),
   ]);
   if (positions.length === 0 && pageNumber > 1) notFound();
-  // Positions in a stock we can identify link to its stock page.
-  const stockTickers = await getStockTickers(
-    positions.flatMap((position) => (position.cusip ? [position.cusip] : [])),
+  // Positions in a stock we can identify link to its stock page, under the stock's readable name.
+  const stocks = await getStockLinks(
+    [...positions, ...(largest ? [largest] : [])].flatMap((position) => (position.cusip ? [position.cusip] : [])),
     selected.reportPeriod,
   );
+  const largestName = largest ? (largest.cusip && stocks[largest.cusip]?.name) || largest.issuer : null;
   const original = filings.find((filing) => filing.amendmentType === "none");
   const amendments = filings.filter((filing) => filing.amendmentType !== "none");
   const label = quarterLabel(selected.reportPeriod);
@@ -118,6 +119,7 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
           <div>
             <h1 className={styles.title}>{investor.name}</h1>
             <p className={styles.meta}>
+              {investor.filedName !== investor.name && <span>Files as {investor.filedName}</span>}
               <span>CIK {investor.cik}</span>
               <span>Holdings reported to the SEC on Form 13F</span>
               <a href={`https://www.sec.gov/edgar/browse/?CIK=${Number(investor.cik)}`}>SEC EDGAR filings ↗</a>
@@ -178,7 +180,7 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
               </div>
               <div className={styles.tile}>
                 <p className={styles.label}>Largest position</p>
-                <p className={styles.tileValue}>{largest?.issuer ?? "None reported"}</p>
+                <p className={styles.tileValue}>{largestName ?? "None reported"}</p>
                 <p className={styles.note}>
                   {largest ? `${formatPercent(largest.portfolioShare)} of reported value` : "No holdings in this report"}
                 </p>
@@ -255,7 +257,7 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
               caption={`Largest holdings, ${label}, combined by security`}
               links={tableLinks}
               status={tableStatus}
-              stockTickers={stockTickers}
+              stocks={stocks}
             />
           </section>
 

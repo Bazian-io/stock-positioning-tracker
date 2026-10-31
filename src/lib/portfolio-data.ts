@@ -1,14 +1,30 @@
 import "server-only";
 import { cache } from "react";
+import { investorName } from "./names";
 import { secFilingUrl, type Position } from "./portfolio";
 import { readOnlySupabase } from "./supabase";
 
+export type Segment = "asset_manager" | "active_manager" | "quantitative";
+
 export type Investor = {
   id: string;
-  name: string;
+  name: string; // Short display name, or the name as filed when none is recorded.
+  filedName: string; // As filed with the SEC.
   cik: string;
   slug: string; // Permanent URL name: /investors/[slug].
+  segment: Segment | null;
 };
+
+type InvestorRow = { id: string; name: string; display_name: string | null; cik: string; slug: string; segment: Segment | null };
+const INVESTOR_COLUMNS = "id, name, display_name, cik, slug, segment";
+const toInvestor = (row: InvestorRow): Investor => ({
+  id: row.id,
+  name: investorName({ displayName: row.display_name, name: row.name }),
+  filedName: row.name,
+  cik: row.cik,
+  slug: row.slug,
+  segment: row.segment,
+});
 
 export type QuarterSummary = {
   reportPeriod: string;
@@ -40,10 +56,11 @@ export async function load<T>(request: PromiseLike<{ data: T | null; error: { me
 
 // Loaded once per request, for both the page and its metadata.
 export const getInvestorBySlug = cache(async (slug: string): Promise<Investor | null> => {
-  return load<Investor | null>(
-    readOnlySupabase().from("investors").select("id, name, cik, slug").eq("slug", slug).maybeSingle(),
+  const row = await load<InvestorRow | null>(
+    readOnlySupabase().from("investors").select(INVESTOR_COLUMNS).eq("slug", slug).maybeSingle(),
     "investor",
   );
+  return row ? toInvestor(row) : null;
 });
 
 export type InvestorSummary = Investor & {
@@ -51,12 +68,14 @@ export type InvestorSummary = Investor & {
   firstQuarter: string | null; // Report periods; null when no quarter has been imported yet.
   latestQuarter: string | null;
   latestValueUsd: number | null;
+  values: { reportPeriod: string; valueUsd: number }[]; // Every reported quarter's value, oldest first.
 };
 
 // Every investor in the database, by name, with the quarters it has reported (quarterly_portfolios).
 export async function getInvestorSummaries(): Promise<InvestorSummary[]> {
   const db = readOnlySupabase();
-  const investors = await load<Investor[]>(db.from("investors").select("id, name, cik, slug").order("name"), "investors");
+  const investors = (await load<InvestorRow[]>(db.from("investors").select(INVESTOR_COLUMNS), "investors"))
+    .map(toInvestor).sort((a, b) => a.name.localeCompare(b.name));
   const quarters: { investor_id: string; report_period: string; value_usd: string }[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     const page = await load<typeof quarters>(
@@ -79,6 +98,7 @@ export async function getInvestorSummaries(): Promise<InvestorSummary[]> {
       firstQuarter: reported[0]?.report_period ?? null,
       latestQuarter: latest?.report_period ?? null,
       latestValueUsd: latest ? Number(latest.value_usd) : null,
+      values: reported.map((quarter) => ({ reportPeriod: quarter.report_period, valueUsd: Number(quarter.value_usd) })),
     };
   });
 }

@@ -63,8 +63,13 @@ key reaches the browser. Public readers see only fully validated filings.
 **Web app**
 
 - Two research sections, Investors and Stocks, linked from the homepage and the main navigation.
-- Investors page: every investor in the database with its latest quarter, reported value and
-  history.
+- Investors page: every investor in the database, grouped into asset managers, active managers and
+  quantitative funds, with its latest reported value, number of positions, largest holding and a
+  trend line of reported value by quarter.
+- Readable names: pages show short names ("State Street", "Bank of America") instead of the names as
+  filed ("STATE STREET CORP", "BANK OF AMER CORP"), which stay in the database unchanged. Stock names
+  come from Nasdaq's directory of US-listed securities; investor names and groups are set in the
+  database.
 - Investor dashboards: one shared page, `/investors/[slug]`, for every investor in the database
   (e.g. `/investors/berkshire-hathaway`, `/investors/blackrock`). Each investor's URL name is stored
   in the database when it is added, so it stays the same if the investor's name changes. Portfolio value by quarter (chart

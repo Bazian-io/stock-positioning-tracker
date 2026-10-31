@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { companyName, investorName, stockName } from "./names";
 import { load, PAGE_SIZE } from "./portfolio-data";
 import { identifiesStock, lastQuarterBefore, type Conversion, type CusipPeriod } from "./stock";
 import { readOnlySupabase } from "./supabase";
@@ -9,7 +10,9 @@ export type Stock = {
   securityId: string;
   ticker: string; // Current ticker.
   exchange: string; // MIC of the ticker's exchange, e.g. XNAS.
-  name: string;
+  name: string; // Short name for pages, e.g. "Bank of America".
+  companyName: string | null; // Full name from Nasdaq's directory, e.g. "Bank of America Corporation".
+  issuerName: string; // As identified from SEC's company list, e.g. "BANK OF AMERICA CORP".
   shareClass: string | null;
   securityType: string;
   cusips: CusipPeriod[];
@@ -23,7 +26,8 @@ type IdentifierRow = {
   valid_from: string;
   valid_to: string | null;
 };
-type SecurityRow = { id: string; issuer_name: string; share_class: string | null; security_type: string };
+type SecurityRow = { id: string; issuer_name: string; listing_name: string | null; share_class: string | null; security_type: string };
+const SECURITY_COLUMNS = "id, issuer_name, listing_name, share_class, security_type";
 
 const IDENTIFIER_COLUMNS = "security_id, identifier_type, identifier_value, namespace, valid_from, valid_to";
 const today = () => new Date().toISOString().slice(0, 10);
@@ -48,7 +52,9 @@ function toStock(security: SecurityRow, identifiers: IdentifierRow[]): Stock | n
     securityId: security.id,
     ticker: ticker.identifier_value,
     exchange: ticker.namespace,
-    name: security.issuer_name,
+    name: stockName({ listingName: security.listing_name, issuerName: security.issuer_name }),
+    companyName: security.listing_name ? companyName(security.listing_name) : null,
+    issuerName: security.issuer_name,
     shareClass: security.share_class,
     securityType: security.security_type,
     cusips: identifiers
@@ -65,7 +71,7 @@ type TickerRows = { merge: false };
 function currentTickers(count?: "exact") {
   const date = today();
   return readOnlySupabase().from("security_identifiers")
-    .select(`${IDENTIFIER_COLUMNS}, securities!inner(id, issuer_name, share_class, security_type)`, { count })
+    .select(`${IDENTIFIER_COLUMNS}, securities!inner(${SECURITY_COLUMNS})`, { count })
     .eq("identifier_type", "ticker")
     .lte("valid_from", date)
     .or(`valid_to.is.null,valid_to.gt.${date}`);
@@ -96,11 +102,13 @@ export async function getStockPage(search: string, offset: number, limit: number
     rows = page.data;
     total = page.count ?? 0;
   } else {
-    const [tickerMatches, nameMatches, cusipMatches] = await Promise.all([
+    const [tickerMatches, nameMatches, listedNameMatches, cusipMatches] = await Promise.all([
       loadAll<TickerRow>((from, to) => currentTickers().ilike("identifier_value", `*${text.toUpperCase().replace(/[./]/g, "-")}*`)
         .order("id").range(from, to).overrideTypes<TickerRow[], TickerRows>(), "stocks by ticker"),
       loadAll<TickerRow>((from, to) => currentTickers().ilike("securities.issuer_name", `*${text}*`)
         .order("id").range(from, to).overrideTypes<TickerRow[], TickerRows>(), "stocks by name"),
+      loadAll<TickerRow>((from, to) => currentTickers().ilike("securities.listing_name", `*${text}*`)
+        .order("id").range(from, to).overrideTypes<TickerRow[], TickerRows>(), "stocks by listed name"),
       load<{ security_id: string }[]>(db.from("security_identifiers").select("security_id")
         .eq("identifier_type", "cusip").eq("identifier_value", text.toUpperCase()), "stocks by CUSIP"),
     ]);
@@ -109,7 +117,7 @@ export async function getStockPage(search: string, offset: number, limit: number
       currentTickers().in("security_id", cusipSecurities).overrideTypes<TickerRow[], TickerRows>(),
       "stocks by CUSIP",
     );
-    const matches = new Map([...tickerMatches, ...nameMatches, ...byCusip].map((row) => [row.security_id, row]));
+    const matches = new Map([...tickerMatches, ...nameMatches, ...listedNameMatches, ...byCusip].map((row) => [row.security_id, row]));
     const sorted = [...matches.values()].sort(byTicker);
     rows = sorted.slice(offset, offset + limit);
     total = sorted.length;
@@ -134,15 +142,17 @@ export const getStock = cache(async (ticker: string): Promise<Stock | null> => {
   const match = matches.find((row) => validOn(row, today()));
   if (!match) return null;
   const [security, identifiers] = await Promise.all([
-    load<SecurityRow>(db.from("securities").select("id, issuer_name, share_class, security_type").eq("id", match.security_id).single(), "security"),
+    load<SecurityRow>(db.from("securities").select(SECURITY_COLUMNS).eq("id", match.security_id).single(), "security"),
     load<IdentifierRow[]>(db.from("security_identifiers").select(IDENTIFIER_COLUMNS).eq("security_id", match.security_id), "security identifiers"),
   ]);
   return toStock(security, identifiers);
 });
 
-// Current tickers for the reported CUSIPs that identify a stock at this quarter end, for linking
-// holdings to stock pages. CUSIPs without a stock are left out.
-export async function getStockTickers(cusips: string[], reportPeriod: string): Promise<Record<string, string>> {
+export type StockLink = { ticker: string; name: string };
+
+// Current tickers and names for the reported CUSIPs that identify a stock at this quarter end, for
+// linking holdings to stock pages. CUSIPs without a stock are left out.
+export async function getStockLinks(cusips: string[], reportPeriod: string): Promise<Record<string, StockLink>> {
   const unique = [...new Set(cusips)];
   if (unique.length === 0) return {};
   const db = readOnlySupabase();
@@ -151,15 +161,20 @@ export async function getStockTickers(cusips: string[], reportPeriod: string): P
     "CUSIP identifiers",
   )).filter((row) => validOn(row, reportPeriod));
   if (matches.length === 0) return {};
-  const tickers = (await load<IdentifierRow[]>(
-    db.from("security_identifiers").select(IDENTIFIER_COLUMNS).eq("identifier_type", "ticker")
-      .in("security_id", [...new Set(matches.map((row) => row.security_id))]),
-    "ticker identifiers",
-  )).filter((row) => validOn(row, today()));
-  const tickerBySecurity = new Map(tickers.map((row) => [row.security_id, row.identifier_value]));
+  const securityIds = [...new Set(matches.map((row) => row.security_id))];
+  const [tickers, securities] = await Promise.all([
+    load<IdentifierRow[]>(
+      db.from("security_identifiers").select(IDENTIFIER_COLUMNS).eq("identifier_type", "ticker").in("security_id", securityIds),
+      "ticker identifiers",
+    ),
+    load<SecurityRow[]>(db.from("securities").select(SECURITY_COLUMNS).in("id", securityIds), "securities"),
+  ]);
+  const tickerBySecurity = new Map(tickers.filter((row) => validOn(row, today())).map((row) => [row.security_id, row.identifier_value]));
   return Object.fromEntries(matches.flatMap((row) => {
     const ticker = tickerBySecurity.get(row.security_id);
-    return ticker ? [[row.identifier_value, ticker]] : [];
+    const security = securities.find((candidate) => candidate.id === row.security_id);
+    if (!ticker || !security) return [];
+    return [[row.identifier_value, { ticker, name: stockName({ listingName: security.listing_name, issuerName: security.issuer_name }) }]];
   }));
 }
 
@@ -207,7 +222,8 @@ export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
   const db = readOnlySupabase();
   const cusips = [...new Set(stock.cusips.map((period) => period.cusip))];
   const [investors, reports, positions, conversions] = await Promise.all([
-    load<StockOwnership["investors"]>(db.from("investors").select("id, name, slug").order("name"), "investors"),
+    load<{ id: string; name: string; display_name: string | null; slug: string }[]>(
+      db.from("investors").select("id, name, display_name, slug"), "investors"),
     loadAll<{ investor_id: string; report_period: string; value_usd: string; has_confidential_omissions: boolean }>(
       (from, to) => db.from("quarterly_portfolios")
         .select("investor_id, report_period, value_usd::text, has_confidential_omissions")
@@ -241,7 +257,9 @@ export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
   const all = positions.map(toPosition);
   const confirmed = (position: StockPosition) => identifiesStock(stock.cusips, position.cusip, position.reportPeriod);
   return {
-    investors,
+    investors: investors
+      .map((row) => ({ id: row.id, name: investorName({ displayName: row.display_name, name: row.name }), slug: row.slug }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
     reports: reports.map((row) => ({
       investorId: row.investor_id,
       reportPeriod: row.report_period,

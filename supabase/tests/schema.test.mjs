@@ -563,3 +563,40 @@ test("the slug migration gives existing investors the URLs the website already u
     await database.close();
   }
 });
+
+test("the display-name migration names and groups the tracked investors without changing their data", async () => {
+  const name = "20261030120000_display_names.sql";
+  const database = await createDatabase(migrations.indexOf(name));
+  try {
+    await database.exec(`
+      insert into public.investors (name, cik) values
+        ('STATE STREET CORP', '0000093751'), ('D. E. Shaw & Co., Inc.', '0001009207'), ('Example Capital LLC', '0000000101');
+      insert into public.securities (issuer_name) values ('BANK OF AMERICA CORP');
+    `);
+    const investors = "select id, name, cik, slug, track_filings, created_at from public.investors order by cik";
+    const before = (await database.query(investors)).rows;
+    await database.exec(await readFile(new URL(name, migrationsDir), "utf8"));
+    assert.deepEqual((await database.query(investors)).rows, before);
+    assert.deepEqual((await database.query("select slug, display_name, segment from public.investors order by cik")).rows, [
+      { slug: "example-capital", display_name: null, segment: null },
+      { slug: "state-street", display_name: "State Street", segment: "asset_manager" },
+      { slug: "d-e-shaw", display_name: "D. E. Shaw", segment: "quantitative" },
+    ]);
+    assert.equal((await database.query("select listing_name from public.securities")).rows[0].listing_name, null);
+  } finally {
+    await database.close();
+  }
+});
+
+test("display names, segments and listing names are checked, and the public can read them", async () => {
+  const investor = await insert("investors", { name: "Example Capital LLC", cik: "0000000101" });
+  await db.query("update public.investors set display_name = 'Example', segment = 'active_manager' where id = $1", [investor.id]);
+  await rejected("update public.investors set segment = 'hedge_fund' where id = $1", [investor.id], /check constraint/);
+  await rejected("update public.investors set display_name = ' Example' where id = $1", [investor.id], /check constraint/);
+  const security = await insert("securities", { issuer_name: "BANK OF AMERICA CORP", listing_name: "Bank of America Corporation Common Stock" });
+  await rejected("update public.securities set listing_name = ' ' where id = $1", [security.id], /check constraint/);
+  await db.exec("set local role anon;");
+  assert.equal((await db.query("select display_name from public.investors where id = $1", [investor.id])).rows[0].display_name, "Example");
+  assert.equal((await db.query("select listing_name from public.securities where id = $1", [security.id])).rows[0].listing_name,
+    "Bank of America Corporation Common Stock");
+});

@@ -619,12 +619,78 @@
   font-size: 14px;
 }
 
+/* A cell whose notes wrap, so a long note does not push the other columns out of the card. */
+.table .wrapping {
+  min-width: 200px;
+  white-space: normal;
+}
+
+.wrapping .securityClass {
+  max-width: 48ch;
+}
+
+/* ▲ or ▼ beside a change. */
+.changeMarker {
+  display: inline-block;
+  width: 1.1em;
+  color: var(--text-secondary);
+  font-size: 10px;
+  vertical-align: 1px;
+}
+
+/* Investors listed by name in one line, e.g. those that held none in either quarter. */
+.table .namesRow td {
+  padding-top: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: normal;
+}
+
+.namesLabel {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 /* Group headings inside a table, e.g. investors without a report. */
 .groupRow th {
   padding-top: 18px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+}
+
+/* A long group heading wraps rather than widening the table. */
+.table .groupRow th {
+  white-space: normal;
+}
+
+.groupDetail {
+  font-weight: 400;
+}
+
+/* Sparkline: the trend in the recessive gray, the latest quarter in the accent with a surface ring. */
+.sparkline {
+  display: block;
+  overflow: visible;
+}
+
+.sparklineLine {
+  fill: none;
+  stroke: var(--deemphasis-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sparklineLatest {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.sparklineHit {
+  fill: transparent;
 }
 
 /* Stock search */
@@ -801,5 +867,9 @@
   .table thead th,
   .table .security {
     white-space: normal;
+  }
+
+  .table .wrapping {
+    min-width: 0;
   }
 }
