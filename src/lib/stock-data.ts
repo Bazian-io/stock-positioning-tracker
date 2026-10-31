@@ -4,6 +4,7 @@ import { companyName, investorName, stockName } from "./names";
 import { load, PAGE_SIZE } from "./portfolio-data";
 import { identifiesStock, lastQuarterBefore, type Conversion, type CusipPeriod } from "./stock";
 import { readOnlySupabase } from "./supabase";
+import type { ComparisonSecurity } from "./portfolio-changes";
 
 // A stock (one share class of one issuer) from the securities and security_identifiers tables.
 export type Stock = {
@@ -35,13 +36,53 @@ const validOn = (row: { valid_from: string; valid_to: string | null }, date: str
   row.valid_from <= date && (row.valid_to === null || date < row.valid_to);
 
 // Every page of a query whose results can exceed one response.
-async function loadAll<T>(page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>, what: string) {
+export async function loadAll<T>(page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>, what: string) {
   const rows: T[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     const data = await load<T[]>(page(from, from + PAGE_SIZE - 1), what);
     rows.push(...data);
     if (data.length < PAGE_SIZE) return rows;
   }
+}
+
+// Bound both URL size and concurrency when matching a large portfolio's identifiers.
+export async function loadInBatches<T>(values: string[], read: (batch: string[]) => Promise<T[]>): Promise<T[]> {
+  const unique = [...new Set(values)];
+  const batches = Array.from({ length: Math.ceil(unique.length / 150) }, (_, index) => unique.slice(index * 150, (index + 1) * 150));
+  const rows: T[] = [];
+  for (let index = 0; index < batches.length; index += 4) {
+    rows.push(...(await Promise.all(batches.slice(index, index + 4).map(read))).flat());
+  }
+  return rows;
+}
+
+export async function getComparisonSecurities(cusips: string[], extraIds: string[] = []): Promise<ComparisonSecurity[]> {
+  const db = readOnlySupabase();
+  const matches = await loadInBatches(cusips, (batch) => loadAll<{ security_id: string }>(
+    (from, to) => db.from("security_identifiers").select("security_id").eq("identifier_type", "cusip")
+      .in("identifier_value", batch).order("id").range(from, to), "comparison identifiers",
+  ));
+  const identifiers = await loadInBatches([...matches.map((row) => row.security_id), ...extraIds], (batch) => loadAll<TickerRow>(
+    (from, to) => db.from("security_identifiers")
+      .select(`${IDENTIFIER_COLUMNS}, securities!inner(${SECURITY_COLUMNS})`).in("security_id", batch)
+      .order("id").range(from, to).overrideTypes<TickerRow[], TickerRows>(), "comparison securities",
+  ));
+  const grouped = new Map<string, TickerRow[]>();
+  for (const identifier of identifiers) {
+    const rows = grouped.get(identifier.security_id) ?? [];
+    rows.push(identifier);
+    grouped.set(identifier.security_id, rows);
+  }
+  return [...grouped].map(([id, rows]) => {
+    const security = rows[0].securities;
+    return {
+      id,
+      name: stockName({ listingName: security.listing_name, issuerName: security.issuer_name }),
+      ticker: rows.find((row) => row.identifier_type === "ticker" && validOn(row, today()))?.identifier_value ?? null,
+      cusips: rows.filter((row) => row.identifier_type === "cusip")
+        .map((row) => ({ cusip: row.identifier_value, validFrom: row.valid_from, validTo: row.valid_to })),
+    };
+  });
 }
 
 // Stocks need a current ticker; their CUSIPs match them to reported holdings.

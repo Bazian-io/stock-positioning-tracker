@@ -681,6 +681,54 @@
   font-variant-numeric: tabular-nums;
 }
 
+.changeSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.changeTile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.changeTile strong {
+  color: var(--text-primary);
+  font-size: 28px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.changeTile:hover,
+.changeTile[aria-current],
+.changeFilters .pageLink[aria-current] {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.changeFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.changeFilters .pageLink {
+  gap: 8px;
+}
+
+.table.changesTable .wrapping {
+  min-width: 140px;
+  max-width: 32ch;
+}
+
 /* A cell whose notes wrap, so a long note does not push the other columns out of the card. */
 .table .wrapping {
   min-width: 200px;
@@ -974,6 +1022,10 @@
 }
 
 @media (max-width: 640px) {
+  .changeSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .page {
     padding: 16px 16px 40px;
   }

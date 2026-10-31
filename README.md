@@ -78,6 +78,12 @@ key reaches the browser. Public readers see only fully validated filings.
   links to EDGAR. Holdings can be searched across the whole quarter by filed company name, exact ticker
   or CUSIP, and sorted by reported value or filed name. Filtering keeps the full portfolio totals and
   percentages. Positions are combined in the database, so large filers load quickly.
+- Investor changes: consecutive quarters compared for long share positions, with counts and filters
+  for new, increased, reduced, closed and unchanged positions, corporate actions and uncertain
+  comparisons. Rows show reported shares and weights in each quarter's full portfolio. Missing
+  reports, uncertain identifiers and confidential omissions cannot establish an opening or exit;
+  existing stock-split and conversion rules are reused. Options and principal amounts stay in the
+  holdings table. The comparison loads separately so the rest of the dashboard stays available.
 - Stocks page: the stocks that can be matched to holdings, with search by ticker, company name or
   CUSIP.
 - Stock pages, `/stocks/[ticker]` (e.g. `/stocks/AAPL`): which tracked investors report holding the

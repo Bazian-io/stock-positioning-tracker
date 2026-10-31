@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import styles from "@/components/dashboard/dashboard.module.css";
 import { HoldingsTable, type TableLink } from "@/components/dashboard/holdings-table";
 import { PendingFrame, QuarterNavigation, QuarterSelect } from "@/components/dashboard/quarter-navigation";
 import { ValueChart } from "@/components/dashboard/value-chart";
+import { PortfolioChanges, PortfolioChangesLoading } from "@/components/dashboard/portfolio-changes";
+import { CHANGE_FILTERS } from "@/lib/portfolio-changes";
 import {
   POSITION_SORTS, axisTicks, formatDate, formatFilingDate, formatNumber, formatPercent, formatUsd, formatUsdAxis, formatUsdCompact,
   quarterLabel, quarterParts,
@@ -13,7 +16,7 @@ import {
   getInvestorBySlug, getPositions, getQuarterFilings, getQuarterSummaries, type QuarterFiling,
 } from "@/lib/portfolio-data";
 import { getStock, getStockLinks } from "@/lib/stock-data";
-import { identifiesStock } from "@/lib/stock";
+import { identifiesStock, previousQuarter } from "@/lib/stock";
 
 type InvestorPageProps = {
   params: Promise<{ slug: string }>;
@@ -40,13 +43,16 @@ function filingRole(filing: QuarterFiling): string {
 
 // One dashboard for every investor in the database, at /investors/[slug].
 export default async function InvestorPage({ params, searchParams }: InvestorPageProps) {
-  const [{ slug }, { quarter: requested, holdings, page, q, sort: requestedSort }] = await Promise.all([params, searchParams]);
+  const [{ slug }, { quarter: requested, holdings, page, q, sort: requestedSort, change, changePage }] = await Promise.all([params, searchParams]);
   const investor = await getInvestorBySlug(slug);
   if (!investor) notFound();
   const quarters = await getQuarterSummaries(investor.id);
   const latest = quarters.at(-1);
   const selected = requested === undefined ? latest : quarters.find((quarter) => quarter.reportPeriod === requested);
   if (!latest || !selected) notFound();
+  const previous = quarters.find((quarter) => quarter.reportPeriod === previousQuarter(selected.reportPeriod));
+  const changeFilter = CHANGE_FILTERS.find((option) => option.value === change)?.value ?? "changed";
+  const changesPage = typeof changePage === "string" && /^[1-9]\d{0,5}$/.test(changePage) ? Number(changePage) : 1;
 
   const query = typeof q === "string" ? q.trim().slice(0, 100) : "";
   const sort = POSITION_SORTS.find((candidate) => candidate.value === requestedSort) ?? POSITION_SORTS[0];
@@ -83,6 +89,8 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
     if (query && !view.clear) search.set("q", query);
     if (sort !== POSITION_SORTS[0] && !view.clear) search.set("sort", sort.value);
     if (view.page && view.page > 1) search.set("page", String(view.page));
+    if (changeFilter !== "changed") search.set("change", changeFilter);
+    if (changesPage > 1) search.set("changePage", String(changesPage));
     return search.size > 0 ? `${pagePath}?${search}` : pagePath;
   };
   const pageCount = Math.ceil(matching / ALL_HOLDINGS_PAGE);
@@ -105,6 +113,8 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
   if (showAll) keep.holdings = "all";
   if (query) keep.q = query;
   if (sort !== POSITION_SORTS[0]) keep.sort = sort.value;
+  if (changeFilter !== "changed") keep.change = changeFilter;
+  const comparisonQuery = { ...keep, quarter: selected.reportPeriod, ...(pageNumber > 1 ? { page: String(pageNumber) } : {}) };
 
   const ticks = axisTicks(Math.max(...quarters.map((quarter) => quarter.valueUsd)));
   const scaleMax = ticks.at(-1) ?? 1;
@@ -163,6 +173,11 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
               </Link>
             </p>
           )}
+
+          <Suspense key={`${selected.reportPeriod}:${changeFilter}:${changesPage}`} fallback={<PortfolioChangesLoading />}>
+            <PortfolioChanges investorId={investor.id} slug={investor.slug} current={selected} previous={previous}
+              filter={changeFilter} requestedPage={changesPage} query={comparisonQuery} />
+          </Suspense>
 
           <section className={styles.summary} aria-label={`Summary for ${label}`}>
             <div className={styles.hero}>
@@ -270,6 +285,8 @@ export default async function InvestorPage({ params, searchParams }: InvestorPag
             <form key={`${selected.reportPeriod}:${query}:${sort.value}`} className={styles.tableControls} action={`${pagePath}#holdings`} role="search" aria-label="Search portfolio holdings">
               <input type="hidden" name="quarter" value={selected.reportPeriod} />
               <input type="hidden" name="holdings" value="all" />
+              {changeFilter !== "changed" && <input type="hidden" name="change" value={changeFilter} />}
+              {changesPage > 1 && <input type="hidden" name="changePage" value={changesPage} />}
               <label className={styles.searchField}>
                 Search holdings
                 <input name="q" type="search" defaultValue={query} maxLength={100} placeholder="Company, ticker or CUSIP" className={styles.searchInput} />
