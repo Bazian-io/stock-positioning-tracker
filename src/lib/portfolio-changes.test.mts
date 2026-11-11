@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  matchesChange, portfolioChanges, type ComparisonConversion, type ComparisonPosition, type ComparisonSecurity,
+  CHANGE_FILTERS, matchesChange, portfolioChanges, portfolioChangesPage, type ComparisonConversion, type ComparisonPosition, type ComparisonSecurity,
 } from "./portfolio-changes.ts";
 
 const before = { reportPeriod: "2026-03-31", valueUsd: 10_000, confidentialOmissions: false };
@@ -12,6 +12,36 @@ const position = (cusip: string | null, shares: number, reportPeriod: string, va
 });
 const stock = (id: string, cusip: string): ComparisonSecurity => ({
   id, name: id, ticker: id.toUpperCase(), cusips: [{ cusip, validFrom: "2021-09-30", validTo: null }],
+});
+
+test("pagination retains all classified changes, full-portfolio weights and filter counts across page boundaries", () => {
+  const positions = Array.from({ length: 83 }, (_, i) => [
+    position(`security-${i}`, 100 + i, before.reportPeriod),
+    ...(i < 70 ? [position(`security-${i}`, i % 2 ? 100 + i : 150 + i, after.reportPeriod)] : []),
+  ]).flat();
+  const original = structuredClone(positions);
+  const rows = portfolioChanges({ current: after, previous: before, positions });
+  for (const { value: filter } of CHANGE_FILTERS) {
+    const expected = rows.filter(row => matchesChange(row, filter));
+    const first = portfolioChangesPage(rows, filter, 1);
+    assert.equal(first.total, expected.length);
+    const collected = [];
+    for (let page = 1; page <= first.pageCount; page++) {
+      const result = portfolioChangesPage(rows, filter, page);
+      assert.ok(result.rows.length <= 25);
+      assert.deepEqual(result.counts, first.counts);
+      collected.push(...result.rows);
+    }
+    assert.deepEqual(collected, expected);
+    assert.equal(new Set(collected.map(row => row.id)).size, expected.length);
+    assert.equal(portfolioChangesPage(rows, filter, 999).page, first.pageCount);
+  }
+  assert.equal(portfolioChangesPage(rows, "changed", -1).page, 1);
+  const closed = portfolioChangesPage(rows, "closed", 1);
+  assert.equal(closed.total, 13);
+  assert.equal(closed.rows[0].previousWeight, closed.rows[0].previous.valueUsd / before.valueUsd);
+  assert.equal(closed.rows[0].currentWeight, 0);
+  assert.deepEqual(positions, original);
 });
 
 test("new, closed, increased, reduced and unchanged positions have independent counts and full-portfolio weights", () => {

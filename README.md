@@ -223,8 +223,10 @@ package versions, Git history, dates or build information. See [AGENTS.md](AGENT
    [collectors/README.md](collectors/README.md)).
 3. Start the app with `npm run dev` and open http://localhost:3000.
 
-On Vercel, set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` only; the secret key never belongs in
-the web app.
+On Vercel, the database variables are `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`; the Supabase
+secret key never belongs in the web app. Server-side research caching also requires a separate
+`RESEARCH_CACHE_SECRET` and an explicit `npm run cache:invalidate` after imports or corrections.
+Caching stays disabled until that secret is configured. See [cache setup and measurements](docs/research-cache.md).
 
 Checks (offline; they never touch Supabase or SEC): `npm run test:db`, `npm run test:collectors`,
 `npm run test:web`, `npm run typecheck` and `npm run lint`. Read-only checks of the live data:
@@ -234,4 +236,5 @@ Checks (offline; they never touch Supabase or SEC): `npm run test:db`, `npm run 
 
 - [collectors/README.md](collectors/README.md): collector commands, amendments, multiple CIKs.
 - [supabase/README.md](supabase/README.md): schema, research views, access rules, applying migrations.
+- [docs/research-cache.md](docs/research-cache.md): cache scope, measured sizes, secure invalidation and remaining performance work.
 - [AGENTS.md](AGENTS.md): rules for AI coding agents working on this repository.

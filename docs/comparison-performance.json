@@ -1,0 +1,256 @@
+{
+  "snapshot": "2026-10-31T10:54:33.168Z",
+  "method": "Local PGlite with current migrations, analyzed tables and anon role. SQL prepares response fixtures; timed application calls replay JSON without network or SQL execution. Medians of three cold fills and five warm reads; GC before timing. Process CPU includes background GC. Position-query durations are single local preparation runs, not production latency. React rendering is excluded.",
+  "cases": [
+    {
+      "name": "d-e-shaw",
+      "rows": 3678,
+      "financialOutputsEqual": true,
+      "financialHash": "24d3a9dfdf11d55ec582628737520932eb65097232187315c68f225d29409a78",
+      "before": {
+        "name": "d-e-shaw",
+        "positionQueryCount": 7,
+        "positionQueryMs": 153.4611670000004,
+        "rows": 3678,
+        "jsonBytes": 2447777,
+        "financialHash": "24d3a9dfdf11d55ec582628737520932eb65097232187315c68f225d29409a78",
+        "cold": {
+          "requests": 53,
+          "responseBytes": 3827990,
+          "cacheBytes": 0,
+          "cpuMs": 68.027,
+          "wallMs": 27.356458000000202
+        },
+        "warm": {
+          "requests": 53,
+          "responseBytes": 3827990,
+          "cacheBytes": 0,
+          "cpuMs": 67.926,
+          "wallMs": 26.812832999999955
+        }
+      },
+      "after": {
+        "name": "d-e-shaw",
+        "positionQueryCount": 1,
+        "positionQueryMs": 47.17966699999943,
+        "rows": 3678,
+        "jsonBytes": 2447777,
+        "financialHash": "24d3a9dfdf11d55ec582628737520932eb65097232187315c68f225d29409a78",
+        "cold": {
+          "requests": 47,
+          "responseBytes": 2032742,
+          "cacheBytes": 560983,
+          "cpuMs": 86.915,
+          "wallMs": 39.324915999999575
+        },
+        "warm": {
+          "requests": 0,
+          "responseBytes": 0,
+          "cacheBytes": 0,
+          "cpuMs": 31.668,
+          "wallMs": 9.022375000000466
+        }
+      }
+    },
+    {
+      "name": "two-sigma-investments",
+      "rows": 4233,
+      "financialOutputsEqual": true,
+      "financialHash": "e027b91f9da8133d675f8751157d52b1437244c6704ac5e80ad05f2b339fa732",
+      "before": {
+        "name": "two-sigma-investments",
+        "positionQueryCount": 8,
+        "positionQueryMs": 140.92504100000133,
+        "rows": 4233,
+        "jsonBytes": 2825651,
+        "financialHash": "e027b91f9da8133d675f8751157d52b1437244c6704ac5e80ad05f2b339fa732",
+        "cold": {
+          "requests": 62,
+          "responseBytes": 4520167,
+          "cacheBytes": 0,
+          "cpuMs": 68.1,
+          "wallMs": 28.32537500000035
+        },
+        "warm": {
+          "requests": 62,
+          "responseBytes": 4520167,
+          "cacheBytes": 0,
+          "cpuMs": 68.778,
+          "wallMs": 27.987457999999606
+        }
+      },
+      "after": {
+        "name": "two-sigma-investments",
+        "positionQueryCount": 1,
+        "positionQueryMs": 41.48620799999935,
+        "rows": 4233,
+        "jsonBytes": 2825651,
+        "financialHash": "e027b91f9da8133d675f8751157d52b1437244c6704ac5e80ad05f2b339fa732",
+        "cold": {
+          "requests": 55,
+          "responseBytes": 2399288,
+          "cacheBytes": 656343,
+          "cpuMs": 83.845,
+          "wallMs": 41.25287500000013
+        },
+        "warm": {
+          "requests": 0,
+          "responseBytes": 0,
+          "cacheBytes": 0,
+          "cpuMs": 57.542,
+          "wallMs": 13.519000000000233
+        }
+      }
+    },
+    {
+      "name": "state-street",
+      "rows": 4221,
+      "financialOutputsEqual": true,
+      "financialHash": "b841b229e6d586f2386f05f378368eec3b40cf7bbf784b9dfaa961a2a47703ae",
+      "before": {
+        "name": "state-street",
+        "positionQueryCount": 9,
+        "positionQueryMs": 165.1653359999982,
+        "rows": 4221,
+        "jsonBytes": 2870097,
+        "financialHash": "b841b229e6d586f2386f05f378368eec3b40cf7bbf784b9dfaa961a2a47703ae",
+        "cold": {
+          "requests": 65,
+          "responseBytes": 4933112,
+          "cacheBytes": 0,
+          "cpuMs": 71.656,
+          "wallMs": 31.5815419999999
+        },
+        "warm": {
+          "requests": 65,
+          "responseBytes": 4933112,
+          "cacheBytes": 0,
+          "cpuMs": 71.291,
+          "wallMs": 29.099208000000544
+        }
+      },
+      "after": {
+        "name": "state-street",
+        "positionQueryCount": 1,
+        "positionQueryMs": 56.79779099999996,
+        "rows": 4221,
+        "jsonBytes": 2870097,
+        "financialHash": "b841b229e6d586f2386f05f378368eec3b40cf7bbf784b9dfaa961a2a47703ae",
+        "cold": {
+          "requests": 57,
+          "responseBytes": 2620020,
+          "cacheBytes": 690575,
+          "cpuMs": 86.56,
+          "wallMs": 43.60699999999997
+        },
+        "warm": {
+          "requests": 0,
+          "responseBytes": 0,
+          "cacheBytes": 0,
+          "cpuMs": 51.071,
+          "wallMs": 10.272624999999607
+        }
+      }
+    },
+    {
+      "name": "renaissance-technologies",
+      "rows": 3779,
+      "financialOutputsEqual": true,
+      "financialHash": "60f6e03f12398ff68b1cb1dad8b1da4abcdf134fb21fca522294b293cb7d261d",
+      "before": {
+        "name": "renaissance-technologies",
+        "positionQueryCount": 7,
+        "positionQueryMs": 108.12841799999842,
+        "rows": 3779,
+        "jsonBytes": 2508149,
+        "financialHash": "60f6e03f12398ff68b1cb1dad8b1da4abcdf134fb21fca522294b293cb7d261d",
+        "cold": {
+          "requests": 55,
+          "responseBytes": 3930800,
+          "cacheBytes": 0,
+          "cpuMs": 67.647,
+          "wallMs": 27.392707999999402
+        },
+        "warm": {
+          "requests": 55,
+          "responseBytes": 3930800,
+          "cacheBytes": 0,
+          "cpuMs": 67.827,
+          "wallMs": 26.77124999999978
+        }
+      },
+      "after": {
+        "name": "renaissance-technologies",
+        "positionQueryCount": 1,
+        "positionQueryMs": 59.76495799999975,
+        "rows": 3779,
+        "jsonBytes": 2508149,
+        "financialHash": "60f6e03f12398ff68b1cb1dad8b1da4abcdf134fb21fca522294b293cb7d261d",
+        "cold": {
+          "requests": 49,
+          "responseBytes": 2084564,
+          "cacheBytes": 571767,
+          "cpuMs": 88.188,
+          "wallMs": 41.05104200000005
+        },
+        "warm": {
+          "requests": 0,
+          "responseBytes": 0,
+          "cacheBytes": 0,
+          "cpuMs": 16.122,
+          "wallMs": 8.790041000000201
+        }
+      }
+    },
+    {
+      "name": "d-e-shaw / two-sigma",
+      "rows": 4574,
+      "financialOutputsEqual": true,
+      "financialHash": "3db282a800c069bb6b87865b011b8d2c35d576e2c02c15d59ca497bcc91a2f6e",
+      "before": {
+        "name": "d-e-shaw / two-sigma",
+        "positionQueryCount": 8,
+        "positionQueryMs": 164.26166699999794,
+        "rows": 4574,
+        "jsonBytes": 2445566,
+        "financialHash": "3db282a800c069bb6b87865b011b8d2c35d576e2c02c15d59ca497bcc91a2f6e",
+        "cold": {
+          "requests": 65,
+          "responseBytes": 4584308,
+          "cacheBytes": 0,
+          "cpuMs": 81.916,
+          "wallMs": 27.36591700000099
+        },
+        "warm": {
+          "requests": 65,
+          "responseBytes": 4584308,
+          "cacheBytes": 0,
+          "cpuMs": 65.921,
+          "wallMs": 24.99091700000099
+        }
+      },
+      "after": {
+        "name": "d-e-shaw / two-sigma",
+        "positionQueryCount": 1,
+        "positionQueryMs": 43.0005000000001,
+        "rows": 4574,
+        "jsonBytes": 2445566,
+        "financialHash": "3db282a800c069bb6b87865b011b8d2c35d576e2c02c15d59ca497bcc91a2f6e",
+        "cold": {
+          "requests": 58,
+          "responseBytes": 2431931,
+          "cacheBytes": 587195,
+          "cpuMs": 81.849,
+          "wallMs": 39.64704200000051
+        },
+        "warm": {
+          "requests": 0,
+          "responseBytes": 0,
+          "cacheBytes": 0,
+          "cpuMs": 19.815,
+          "wallMs": 8.64258400000017
+        }
+      }
+    }
+  ]
+}

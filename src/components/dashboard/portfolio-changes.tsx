@@ -1,13 +1,12 @@
 import Link from "next/link";
 import { describeChange } from "@/lib/change-description";
 import { getPortfolioChanges } from "@/lib/portfolio-changes-data";
-import { CHANGE_FILTERS, matchesChange, type ChangeFilter, type ComparisonQuarter, type PortfolioChange } from "@/lib/portfolio-changes";
+import { CHANGE_FILTERS, portfolioChangesPage, type ChangeFilter, type ComparisonQuarter, type PortfolioChange } from "@/lib/portfolio-changes";
 import { formatNumber, formatPercent, quarterLabel } from "@/lib/portfolio";
 import { previousQuarter, type QuarterHolding } from "@/lib/stock";
 import { detailReturnTarget, researchHref, returnTarget } from "@/lib/research";
 import styles from "./dashboard.module.css";
 
-const PAGE_SIZE = 25;
 const SUMMARY_FILTERS: ChangeFilter[] = ["opened", "increased", "decreased", "closed"];
 
 function shares(holding: QuarterHolding): string {
@@ -68,12 +67,8 @@ export async function PortfolioChanges({ investorId, slug, current, previous, fi
       </section>
     );
   }
-  const count = (selection: ChangeFilter) => rows.filter((row) => matchesChange(row, selection)).length;
-  const filtered = rows.filter((row) => matchesChange(row, filter));
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const page = Math.min(requestedPage, pageCount);
-  const start = (page - 1) * PAGE_SIZE;
-  const shown = filtered.slice(start, start + PAGE_SIZE);
+  const { rows: shown, total, counts, pageCount, page, start } = portfolioChangesPage(rows, filter, requestedPage);
+  const count = (selection: ChangeFilter) => counts[selection];
   const label = CHANGE_FILTERS.find((option) => option.value === filter)!.label;
   const value = (weight: number | null) => weight === null ? "—" : formatPercent(weight);
   const back = detailReturnTarget(href(filter, page))?.href;
@@ -154,7 +149,7 @@ export async function PortfolioChanges({ investorId, slug, current, previous, fi
       )}
       <nav className={styles.pagination} aria-label="Position change pages">
         <span className={styles.secondary}>
-          {filtered.length ? `${formatNumber(start + 1)}–${formatNumber(start + shown.length)} of ${formatNumber(filtered.length)}` : "0"} · {label}
+          {total ? `${formatNumber(start + 1)}–${formatNumber(start + shown.length)} of ${formatNumber(total)}` : "0"} · {label}
         </span>
         <div className={styles.pageActions}>
           {pageCount > 1 && <span className={styles.secondary}>Page {formatNumber(page)} of {formatNumber(pageCount)}</span>}

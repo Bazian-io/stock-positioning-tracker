@@ -1,4 +1,5 @@
 import type { Position } from "./portfolio.ts";
+import { pageSlice } from "./pagination.ts";
 import {
   exactShareRatio, holdingSeries, identifiesStock, previousQuarter, quarterChange, receivedInQuarter,
   type Change, type Conversion, type CusipPeriod, type QuarterHolding, type Unconfirmed,
@@ -158,4 +159,15 @@ export function portfolioChanges({ current, previous, positions, securities = []
 
 export function matchesChange(row: PortfolioChange, filter: ChangeFilter): boolean {
   return filter === "changed" ? row.category !== "unchanged" : row.category === filter;
+}
+
+export function portfolioChangesPage(rows: PortfolioChange[], filter: ChangeFilter, requestedPage: number) {
+  const counts = Object.fromEntries(CHANGE_FILTERS.map(({ value }) => [value, 0])) as Record<ChangeFilter, number>;
+  const filtered: PortfolioChange[] = [];
+  for (const row of rows) {
+    counts[row.category]++;
+    if (row.category !== "unchanged") counts.changed++;
+    if (matchesChange(row, filter)) filtered.push(row);
+  }
+  return { ...pageSlice(filtered, requestedPage), counts, all: rows.length };
 }

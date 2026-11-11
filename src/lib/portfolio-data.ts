@@ -3,6 +3,7 @@ import { cache } from "react";
 import { investorName } from "./names";
 import { POSITION_SORTS, secFilingUrl, type Position, type PositionSort } from "./portfolio";
 import { readOnlySupabase } from "./supabase";
+import { cacheResearch } from "./research-cache";
 
 export type Segment = "asset_manager" | "active_manager" | "quantitative";
 
@@ -72,7 +73,7 @@ export type InvestorSummary = Investor & {
 };
 
 // Every investor in the database, by name, with the quarters it has reported (quarterly_portfolios).
-export async function getInvestorSummaries(): Promise<InvestorSummary[]> {
+export const getInvestorSummaries = cacheResearch("investor-summaries", async (): Promise<InvestorSummary[]> => {
   const db = readOnlySupabase();
   const investors = (await load<InvestorRow[]>(db.from("investors").select(INVESTOR_COLUMNS), "investors"))
     .map(toInvestor).sort((a, b) => a.name.localeCompare(b.name));
@@ -101,7 +102,7 @@ export async function getInvestorSummaries(): Promise<InvestorSummary[]> {
       values: reported.map((quarter) => ({ reportPeriod: quarter.report_period, valueUsd: Number(quarter.value_usd) })),
     };
   });
-}
+});
 
 // One row per quarter from the quarterly_portfolios research view, oldest first. Each value
 // already applies amendments: the latest original or restatement plus later new holdings.

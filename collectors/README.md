@@ -264,6 +264,10 @@ reported:
    `--predecessor` and `--conversion` (with `--split` for splits) for stock links, and the SEC filing
    itself for value questions.
 4. Each quarter, run `npm run check:data -- --identities` for ticker and CUSIP changes.
+5. When web caching is enabled, run `npm run cache:invalidate` after the batch and any corrections,
+   then verify the updated data in the app. This is a manual step; collector commands do not do it
+   automatically. Invalidate after a failed run too if it published any validated filings. See
+   [cache setup](../docs/research-cache.md) for the separate secret and Vercel Authentication support.
 
 ### Other notes
 

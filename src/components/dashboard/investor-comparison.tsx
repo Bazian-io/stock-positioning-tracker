@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { COMPARISON_FILTERS, COMPARISON_SORTS, comparisonCounts, comparisonRows, type ComparisonFilter, type ComparisonSort } from "@/lib/investor-comparison";
+import { COMPARISON_FILTERS, COMPARISON_SORTS, investorComparisonPage, type ComparisonFilter, type ComparisonSort } from "@/lib/investor-comparison";
 import { formatNumber, formatPercent, formatUsdCompact, quarterLabel } from "@/lib/portfolio";
 import type { Investor } from "@/lib/portfolio-data";
 import { getInvestorComparison } from "@/lib/portfolio-changes-data";
@@ -7,8 +7,6 @@ import { researchHref } from "@/lib/research";
 import { uncertainZero, type QuarterHolding } from "@/lib/stock";
 import styles from "./dashboard.module.css";
 import comparison from "./investor-comparison.module.css";
-
-const PAGE_SIZE = 25;
 
 export function InvestorComparisonLoading() {
   return <section className={styles.card} aria-busy="true" aria-label="Investor comparison">
@@ -44,18 +42,13 @@ export async function InvestorComparison({ left, right, period, latestCommon, fi
   }
   const { rows, leftReport, rightReport } = data;
   const comparable = Boolean(leftReport && rightReport);
-  const counts = comparisonCounts(rows);
+  const { rows: shown, total, counts, sharedWeights, pageCount, page, start } = investorComparisonPage(rows, filter, query, sort, requestedPage);
   const labels: Record<ComparisonFilter, string> = {
     all: "All holdings", shared: "Shared holdings", "left-only": `${left.name} only`, "right-only": `${right.name} only`, unclear: "Unclear comparisons",
   };
-  const filtered = comparisonRows(rows, filter, query, sort);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const page = Math.min(requestedPage, pageCount);
-  const start = (page - 1) * PAGE_SIZE;
-  const shown = filtered.slice(start, start + PAGE_SIZE);
   const from = `${href(filter, page)}#comparison-holdings`;
   const weightInShared = (side: "leftWeight" | "rightWeight") => comparable
-    ? formatPercent(rows.filter((row) => row.category === "shared").reduce((sum, row) => sum + (row[side] ?? 0), 0)) : "—";
+    ? formatPercent(sharedWeights[side]) : "—";
 
   return <>
     {!comparable && <p className={styles.notice} role="status">
@@ -119,7 +112,7 @@ export async function InvestorComparison({ left, right, period, latestCommon, fi
         </table>
       </div>}
       <nav className={styles.pagination} aria-label="Comparison holding pages">
-        <span className={styles.secondary}>{filtered.length ? `${formatNumber(start + 1)}–${formatNumber(start + shown.length)} of ${formatNumber(filtered.length)}` : "0"} · {labels[filter]}</span>
+        <span className={styles.secondary}>{total ? `${formatNumber(start + 1)}–${formatNumber(start + shown.length)} of ${formatNumber(total)}` : "0"} · {labels[filter]}</span>
         <div className={styles.pageActions}><span className={styles.secondary}>Page {formatNumber(page)} of {formatNumber(pageCount)}</span>
           {page > 1 && <Link href={`${href(filter, page - 1)}#comparison-holdings`} className={styles.pageLink}>← Previous</Link>}
           {page < pageCount && <Link href={`${href(filter, page + 1)}#comparison-holdings`} className={styles.pageLink}>Next →</Link>}

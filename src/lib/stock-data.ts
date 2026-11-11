@@ -5,6 +5,7 @@ import { load, PAGE_SIZE } from "./portfolio-data";
 import { identifiesStock, lastQuarterBefore, type Conversion, type CusipPeriod } from "./stock";
 import { readOnlySupabase } from "./supabase";
 import type { ComparisonSecurity } from "./portfolio-changes";
+import { cacheResearch } from "./research-cache";
 
 // A stock (one share class of one issuer) from the securities and security_identifiers tables.
 export type Stock = {
@@ -62,21 +63,24 @@ export async function getComparisonSecurities(cusips: string[], extraIds: string
     (from, to) => db.from("security_identifiers").select("security_id").eq("identifier_type", "cusip")
       .in("identifier_value", batch).order("id").range(from, to), "comparison identifiers",
   ));
-  const identifiers = await loadInBatches([...matches.map((row) => row.security_id), ...extraIds], (batch) => loadAll<TickerRow>(
-    (from, to) => db.from("security_identifiers")
-      .select(`${IDENTIFIER_COLUMNS}, securities!inner(${SECURITY_COLUMNS})`).in("security_id", batch)
-      .order("id").range(from, to).overrideTypes<TickerRow[], TickerRows>(), "comparison securities",
+  type ComparisonSecurityRow = {
+    id: string; issuer_name: string; listing_name: string | null;
+    security_identifiers: Pick<IdentifierRow, "identifier_type" | "identifier_value" | "valid_from" | "valid_to">[];
+  };
+  // Return the name once per security, with its identifiers nested. The old join repeated
+  // the security, its UUID and unused fields on every identifier row in a large portfolio.
+  const securities = await loadInBatches([...matches.map((row) => row.security_id), ...extraIds], (batch) => loadAll<ComparisonSecurityRow>(
+    (from, to) => db.from("securities")
+      .select("id, issuer_name, listing_name, security_identifiers(identifier_type, identifier_value, valid_from, valid_to)")
+      .in("id", batch).order("id").order("id", { referencedTable: "security_identifiers" })
+      .range(from, to).overrideTypes<ComparisonSecurityRow[], { merge: false }>(), "comparison securities",
   ));
-  const grouped = new Map<string, TickerRow[]>();
-  for (const identifier of identifiers) {
-    const rows = grouped.get(identifier.security_id) ?? [];
-    rows.push(identifier);
-    grouped.set(identifier.security_id, rows);
-  }
-  return [...grouped].map(([id, rows]) => {
-    const security = rows[0].securities;
+  return securities.map((security) => {
+    const rows = security.security_identifiers;
+    // A capped embedded list must not be mistaken for a complete identifier history.
+    if (rows.length >= PAGE_SIZE) throw new Error("Comparison security identifier history exceeds the response limit");
     return {
-      id,
+      id: security.id,
       name: stockName({ listingName: security.listing_name, issuerName: security.issuer_name }),
       ticker: rows.find((row) => row.identifier_type === "ticker" && validOn(row, today()))?.identifier_value ?? null,
       cusips: rows.filter((row) => row.identifier_type === "cusip")
@@ -260,7 +264,7 @@ const toPosition = (row: PositionRow): StockPosition => ({
 
 // Every tracked investor's reported positions in the stock, in every quarter. The database selects
 // the stock's rows by CUSIP (portfolio_positions), so whole portfolios are never downloaded.
-export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
+export const getStockOwnership = cacheResearch("stock-ownership", async (stock: Stock): Promise<StockOwnership> => {
   const db = readOnlySupabase();
   const cusips = [...new Set(stock.cusips.map((period) => period.cusip))];
   const [investors, reports, positions, conversions] = await Promise.all([
@@ -318,4 +322,4 @@ export async function getStockOwnership(stock: Stock): Promise<StockOwnership> {
     })),
     convertedFrom: convertedFrom.map(toPosition),
   };
-}
+});

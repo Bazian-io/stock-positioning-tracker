@@ -229,6 +229,57 @@ test("portfolio positions follow amendments, apply value units and show public r
   await rejected("insert into public.portfolio_positions (investor_id) values ($1)", [original.investor_id], /permission denied|cannot insert/);
 });
 
+test("comparison inputs preserve amendments, decimal strings, missing identifiers and read-only access", async () => {
+  const original = await filing({ value_multiplier: 1000 }, [{ quantity: 10, reported_value: 100 }]);
+  await filing({ investor_id: original.investor_id, original_filing_id: original.id, form_type: "13F-HR/A",
+    amendment_type: "restatement", amendment_number: 1, filed_at: "2026-08-02T12:00:00Z", value_multiplier: 1 }, [
+    { quantity: 12.5, reported_value: 125 },
+    { quantity: 2, reported_value: 20, position_type: "put" },
+    { quantity: 3, reported_value: 30, quantity_type: "PRN" },
+    { quantity: 1, reported_value: 10, reported_cusip: null, reported_class: null },
+  ]);
+  await filing({ investor_id: original.investor_id, original_filing_id: original.id, form_type: "13F-HR/A",
+    amendment_type: "new_holdings", amendment_number: 2, filed_at: "2026-08-03T12:00:00Z", value_multiplier: 1000 },
+    [{ quantity: 0.25, reported_value: 5 }]);
+  await filing({ investor_id: original.investor_id, filed_at: "2026-08-04T12:00:00Z" }, [{ quantity: 99, reported_value: 990 }], false);
+  const sql = "select public.comparison_positions($1::uuid[], $2::date[]) as positions";
+  const args = [[original.investor_id], ["2026-06-30"]];
+  await db.exec("set local role anon;");
+  const result = (await db.query(sql, args)).rows[0].positions;
+  assert.equal(result.length, 2);
+  const known = result.find(row => row[2] === "123456789");
+  assert.deepEqual(known.slice(0, 5), [original.investor_id, "2026-06-30", "123456789", "Example issuer", null]);
+  assert.equal(typeof known[5], "string");
+  assert.equal(typeof known[6], "string");
+  assert.equal(Number(known[5]), 12.75);
+  assert.equal(Number(known[6]), 5125);
+  assert.equal(result.find(row => row[2] === null)[4], null);
+  await rejected("update public.holdings set quantity = 0", [], /permission denied/);
+  await db.exec("reset role;");
+  const definition = (await db.query(`select provolatile, prosecdef, proretset from pg_proc
+    where oid = 'public.comparison_positions(uuid[],date[])'::regprocedure`)).rows[0];
+  assert.deepEqual(definition, { provolatile: "s", prosecdef: false, proretset: false });
+});
+
+test("comparison inputs reject broad requests and retain every position beyond the API page limit", async () => {
+  const owner = await investor();
+  const other = await investor();
+  const rows = Array.from({ length: 1001 }, (_, i) => ({ quantity: 1, reported_value: 1,
+    reported_cusip: null, reported_issuer: `Issuer ${String(i).padStart(4, "0")}` }));
+  await filing({ investor_id: owner.id }, rows);
+  const sql = "select public.comparison_positions($1::uuid[], $2::date[]) as positions";
+  await db.exec("set local role anon;");
+  const result = (await db.query(sql, [[owner.id], ["2026-06-30"]])).rows[0].positions;
+  assert.equal(result.length, 1001);
+  assert.equal(result.at(-1)[3], "Issuer 1000");
+  assert.deepEqual((await db.query(sql, [[other.id], ["2026-06-30"]])).rows[0].positions, []);
+  for (const args of [[[], ["2026-06-30"]], [[owner.id], []], [[owner.id, other.id, owner.id], ["2026-06-30"]],
+    [[owner.id], ["2026-06-30", "2026-03-31", "2025-12-31"]], [[null], ["2026-06-30"]],
+    [[owner.id, other.id], ["2026-06-30", "2026-03-31"]]]) {
+    await rejected(sql, args, /one or two investors/);
+  }
+});
+
 test("notice reports differ from verified empty portfolios; partial coverage is explicit", async () => {
   await filing({ form_type: "13F-NT", report_type: "notice", reported_entry_count: null, reported_total_value: null }, []);
   const empty = await filing({}, []);
@@ -237,6 +288,71 @@ test("notice reports differ from verified empty portfolios; partial coverage is 
   assert.equal(summaries.length, 2);
   assert.equal(Number(summaries.find((row) => row.base_filing_id === empty.id).holding_row_count), 0);
   assert.ok(summaries.some((row) => row.has_other_reporting_managers && row.has_confidential_omissions));
+});
+
+test("directory summaries match exact position counts and the existing largest-holding tie order", async () => {
+  const first = await filing({ value_multiplier: 1000 }, [
+    { quantity: 10, reported_value: 10, reported_cusip: "111111111", reported_issuer: "Z issuer" },
+    { quantity: 20, reported_value: 20, reported_cusip: "111111111", reported_issuer: "Z renamed" },
+    { quantity: 3, reported_value: 30, reported_cusip: "222222222", reported_issuer: "A issuer" },
+    { quantity: 3, reported_value: 30, reported_cusip: "222222222", reported_issuer: "A issuer", position_type: "put" },
+    { quantity: 3, reported_value: 30, reported_cusip: "222222222", reported_issuer: "A issuer", quantity_type: "PRN" },
+    { quantity: 1, reported_value: 1, reported_cusip: null, reported_class: "A" },
+    { quantity: 2, reported_value: 2, reported_cusip: null, reported_class: "B" },
+  ]);
+  const second = await filing({ report_period: "2026-03-31" }, [{ quantity: 1, reported_value: 9.125 }]);
+  await filing({ investor_id: first.investor_id, report_period: "2026-03-31" }, [{ quantity: 1, reported_value: 999999 }]);
+  await filing({ investor_id: second.investor_id }, [{ quantity: 1, reported_value: 999999 }]);
+  const empty = await filing({}, []);
+  const missing = await investor();
+  const ids = [first.investor_id, second.investor_id, empty.investor_id, missing.id];
+  const periods = ["2026-06-30", "2026-03-31", "2026-06-30", "2026-06-30"];
+  const sql = "select public.directory_portfolio_summaries($1::uuid[], $2::date[]) as summaries";
+  for (const role of ["anon", "authenticated", "service_role"]) {
+    await db.exec(`set local role ${role};`);
+    const summaries = (await db.query(sql, [ids, periods])).rows[0].summaries;
+    for (const [i, id] of ids.entries()) {
+      const positions = (await db.query(`select reported_cusip, reported_issuer, value_usd::text
+        from public.portfolio_positions where investor_id = $1 and report_period = $2
+        order by value_usd::numeric desc, reported_issuer, reported_cusip, reported_class, position_type, quantity_type`, [id, periods[i]])).rows;
+      assert.deepEqual(summaries.find(row => row[0] === id), [id, periods[i], String(positions.length),
+        positions[0]?.reported_cusip ?? null, positions[0]?.reported_issuer ?? null, positions[0]?.value_usd ?? null]);
+    }
+    assert.equal(summaries.find(row => row[0] === first.investor_id)[2], "6");
+    assert.equal(summaries.find(row => row[0] === first.investor_id)[4], "A issuer");
+  }
+});
+
+test("directory summaries use validated amendments and retain all positions beyond an API page", async () => {
+  const original = await filing({}, [{ quantity: 10, reported_value: 1 }]);
+  const amendment = { investor_id: original.investor_id, original_filing_id: original.id, form_type: "13F-HR/A" };
+  await filing({ ...amendment, amendment_type: "restatement", amendment_number: 1, filed_at: "2026-08-02T12:00:00Z" },
+    Array.from({ length: 1001 }, (_, i) => ({ quantity: 1, reported_value: 1, reported_cusip: null, reported_issuer: `Issuer ${i}` })));
+  await filing({ ...amendment, amendment_type: "new_holdings", amendment_number: 2, filed_at: "2026-08-03T12:00:00Z", value_multiplier: 1000 },
+    [{ quantity: 0.25, reported_value: 2.125 }]);
+  await filing({ ...amendment, amendment_type: "restatement", amendment_number: 3, filed_at: "2026-08-04T12:00:00Z" },
+    [{ quantity: 99, reported_value: 99999 }], false);
+  await db.exec("set local role anon;");
+  const result = (await db.query("select public.directory_portfolio_summaries($1::uuid[], $2::date[]) as summaries",
+    [[original.investor_id], ["2026-06-30"]])).rows[0].summaries;
+  assert.equal(result[0][2], "1002");
+  assert.equal(result[0][3], "123456789");
+  assert.equal(Number(result[0][5]), 2125);
+  await rejected("update public.holdings set quantity = 0", [], /permission denied/);
+});
+
+test("directory summary inputs are bounded, paired and read-only with no PUBLIC execution grant", async () => {
+  const owner = await investor();
+  const sql = "select public.directory_portfolio_summaries($1::uuid[], $2::date[])";
+  for (const args of [[null, ["2026-06-30"]], [[], []], [[owner.id], []], [[owner.id], null],
+    [[null], ["2026-06-30"]], [[owner.id], [null]], [[owner.id, owner.id], ["2026-06-30", "2026-03-31"]],
+    [Array(101).fill(owner.id), Array(101).fill("2026-06-30")]]) {
+    await rejected(sql, args, /1 to 100 distinct investors/);
+  }
+  const definition = (await db.query(`select provolatile, prosecdef, proretset,
+    exists (select 1 from aclexplode(proacl) where grantee = 0) as public_grant
+    from pg_proc where oid = 'public.directory_portfolio_summaries(uuid[],date[])'::regprocedure`)).rows[0];
+  assert.deepEqual(definition, { provolatile: "s", prosecdef: false, proretset: false, public_grant: false });
 });
 
 test("holdings retain unmapped rows, option distinctions and source units", async () => {

@@ -5,8 +5,8 @@ import { Fragment } from "react";
 import styles from "@/components/dashboard/dashboard.module.css";
 import { ValueSparkline } from "@/components/dashboard/sparkline";
 import { formatNumber, formatPercent, formatUsdCompact, quarterLabel } from "@/lib/portfolio";
-import { getInvestorSummaries, getPositions, type InvestorSummary, type Segment } from "@/lib/portfolio-data";
-import { getStockLinks } from "@/lib/stock-data";
+import type { InvestorSummary, Segment } from "@/lib/portfolio-data";
+import { getInvestorDirectory } from "@/lib/investor-directory-data";
 import { reportingQuarter, researchHref, type ResearchParams } from "@/lib/research";
 
 export const metadata: Metadata = {
@@ -31,20 +31,10 @@ function history(investor: InvestorSummary, period: string | null): string {
 }
 
 export default async function InvestorsPage({ searchParams }: { searchParams: Promise<ResearchParams> }) {
-  // Rendered per request, like the dashboards, so newly imported investors and quarters appear at once.
+  // Request-specific navigation surrounds shared directory data, invalidated after imports.
   await connection();
   const quarter = reportingQuarter((await searchParams).quarter);
-  const investors = await getInvestorSummaries();
-  const rows = await Promise.all(investors.map(async (investor) => {
-    const period = quarter ?? investor.latestQuarter;
-    const valueUsd = investor.values.find((summary) => summary.reportPeriod === period)?.valueUsd ?? null;
-    const positions = period && valueUsd !== null ? await getPositions(investor.id, period, valueUsd, 0, 1) : null;
-    return { investor, period, valueUsd, positions };
-  }));
-  const periods = [...new Set(rows.flatMap((row) => row.period ? [row.period] : []))];
-  const stocks = new Map(await Promise.all(periods.map(async (period) => [period, await getStockLinks(
-    rows.flatMap((row) => row.period === period && row.positions?.largest?.cusip ? [row.positions.largest.cusip] : []), period,
-  )] as const)));
+  const rows = await getInvestorDirectory(quarter ?? null);
   const listHref = researchHref("/investors", { quarter });
 
   return (
@@ -71,10 +61,10 @@ export default async function InvestorsPage({ searchParams }: { searchParams: Pr
             </p>
           </div>
           <p className={styles.cardMeta}>
-            {investors.length === 1 ? "1 investor" : `${formatNumber(investors.length)} investors`}
+            {rows.length === 1 ? "1 investor" : `${formatNumber(rows.length)} investors`}
           </p>
         </div>
-        {investors.length === 0 ? (
+        {rows.length === 0 ? (
           <p className={styles.cardSubtitle}>No investors have been imported yet.</p>
         ) : (
           <div className={styles.tableScroll}>
@@ -101,9 +91,8 @@ export default async function InvestorsPage({ searchParams }: { searchParams: Pr
                           {title} <span className={styles.groupDetail}>· {members.length} · {detail}</span>
                         </th>
                       </tr>
-                      {members.map(({ investor, positions, period, valueUsd }) => {
+                      {members.map(({ investor, positions, period, valueUsd, largestStock }) => {
                         const largest = positions?.largest ?? null;
-                        const largestStock = largest?.cusip && period ? stocks.get(period)?.[largest.cusip] : undefined;
                         const from = `${listHref}#investor-${investor.slug}`;
                         return (
                           <tr key={investor.id} id={`investor-${investor.slug}`}>

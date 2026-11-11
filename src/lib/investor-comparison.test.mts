@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compareInvestors, comparisonCounts, comparisonPeriods, comparisonRows } from "./investor-comparison.ts";
+import { COMPARISON_FILTERS, COMPARISON_SORTS, compareInvestors, comparisonCounts, comparisonPeriods, comparisonRows, investorComparisonPage } from "./investor-comparison.ts";
 import type { ComparisonPosition, ComparisonSecurity } from "./portfolio-changes.ts";
 import { researchHref, returnTarget } from "./research.ts";
 
@@ -13,6 +13,35 @@ const position = (investorId: string, cusip: string | null, shares: number, extr
 });
 const input = { period, leftId: "a", rightId: "b", leftReport, rightReport };
 const portfolio = [position("a", "shared", 200), position("b", "shared", 50), position("a", "left", 100), position("b", "right", 500)];
+
+test("comparison pages preserve complete counts, shared weights and ordering for every filter and sort", () => {
+  const positions = Array.from({ length: 81 }, (_, i) => [
+    position("a", `security-${i}`, 100 + i),
+    ...(i < 61 ? [position("b", `security-${i}`, 50 + i)] : []),
+  ]).flat();
+  const rows = compareInvestors({ ...input, positions });
+  const original = structuredClone(rows);
+  const shared = rows.filter(row => row.category === "shared");
+  const sharedWeights = {
+    leftWeight: shared.reduce((sum, row) => sum + (row.leftWeight ?? 0), 0),
+    rightWeight: shared.reduce((sum, row) => sum + (row.rightWeight ?? 0), 0),
+  };
+  for (const filter of COMPARISON_FILTERS) for (const { value: sort } of COMPARISON_SORTS) for (const query of ["", "security-1"]) {
+    const expected = comparisonRows(rows, filter, query, sort);
+    const first = investorComparisonPage(rows, filter, query, sort, 1);
+    const collected = [];
+    for (let page = 1; page <= first.pageCount; page++) {
+      const result = investorComparisonPage(rows, filter, query, sort, page);
+      assert.equal(result.total, expected.length);
+      assert.deepEqual(result.counts, comparisonCounts(rows));
+      assert.deepEqual(result.sharedWeights, sharedWeights);
+      collected.push(...result.rows);
+    }
+    assert.deepEqual(collected, expected);
+    assert.equal(investorComparisonPage(rows, filter, query, sort, 999).page, first.pageCount);
+  }
+  assert.deepEqual(rows, original);
+});
 
 test("same-quarter comparisons show shared and unique positions with each full portfolio as denominator", () => {
   const rows = compareInvestors({ ...input, positions: portfolio });

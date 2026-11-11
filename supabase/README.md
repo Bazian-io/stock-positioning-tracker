@@ -81,6 +81,20 @@ quarter; unresolved links must be resolved before marking an amendment complete.
 - `latest_short_interest`: latest accepted revision per security, settlement
   date and provider, retaining earlier accepted versions in the base table.
 
+The read-only `comparison_positions(uuid[], date[])` function returns complete long-share inputs
+from `portfolio_positions` in one JSON value, avoiding repeated aggregation for API pages. It is
+limited to two portfolios and runs with the caller's RLS permissions. Quantities and USD values are
+decimal strings; the app retains its existing financial calculations. The additive migration
+`20261110000000_comparison_positions.sql` must be approved and applied before deploying the code
+that calls it. See [cache and comparison performance](../docs/research-cache.md).
+
+The read-only `directory_portfolio_summaries(uuid[], date[])` function batches the Investors
+directory's exact position counts and largest holdings. Investor/period arrays are paired, limited
+to 100 investors per call, and use caller permissions. It includes all position types and reuses
+the same views and ordering as dashboard holdings. Its local migration
+`20261111000000_directory_portfolio_summaries.sql` also requires approval before application.
+See [directory measurements](../docs/investor-directory-performance.md).
+
 For comparisons, join on investor, reporting periods and security identity,
 keeping share class, quantity type and long/put/call positions separate.
 Retain unmapped rows in totals and report incomplete mapping coverage.

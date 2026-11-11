@@ -1,5 +1,6 @@
 import { groupPositions, portfolioWeight, type ComparisonPosition, type ComparisonQuarter, type ComparisonSecurity } from "./portfolio-changes.ts";
 import { holdingSeries, uncertainZero, type QuarterHolding } from "./stock.ts";
+import { pageSlice } from "./pagination.ts";
 
 export const COMPARISON_FILTERS = ["all", "shared", "left-only", "right-only", "unclear"] as const;
 export type ComparisonFilter = (typeof COMPARISON_FILTERS)[number];
@@ -65,7 +66,9 @@ export function compareInvestors({ period, leftId, rightId, leftReport, rightRep
 }
 
 export function comparisonCounts(rows: InvestorComparisonRow[]) {
-  return Object.fromEntries(COMPARISON_FILTERS.map((filter) => [filter, filter === "all" ? rows.length : rows.filter((row) => row.category === filter).length])) as Record<ComparisonFilter, number>;
+  const counts = { all: rows.length, shared: 0, "left-only": 0, "right-only": 0, unclear: 0 };
+  for (const row of rows) counts[row.category]++;
+  return counts;
 }
 
 export function comparisonRows(rows: InvestorComparisonRow[], filter: ComparisonFilter, query: string, sort: ComparisonSort) {
@@ -82,4 +85,15 @@ export function comparisonRows(rows: InvestorComparisonRow[], filter: Comparison
         : sort === "gap" ? Math.abs(b.weightGap ?? 0) - Math.abs(a.weightGap ?? 0) : 0;
       return difference || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
     });
+}
+
+export function investorComparisonPage(rows: InvestorComparisonRow[], filter: ComparisonFilter, query: string, sort: ComparisonSort, requestedPage: number) {
+  const sharedWeights = { leftWeight: 0, rightWeight: 0 };
+  for (const row of rows) {
+    if (row.category === "shared") {
+      sharedWeights.leftWeight += row.leftWeight ?? 0;
+      sharedWeights.rightWeight += row.rightWeight ?? 0;
+    }
+  }
+  return { ...pageSlice(comparisonRows(rows, filter, query, sort), requestedPage), counts: comparisonCounts(rows), sharedWeights, all: rows.length };
 }
