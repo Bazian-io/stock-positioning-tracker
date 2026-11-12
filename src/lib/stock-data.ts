@@ -178,8 +178,10 @@ export async function getStockPage(search: string, offset: number, limit: number
   return { stocks: stocks.filter((stock): stock is Stock => stock !== null), total };
 }
 
-// The stock with this current ticker. Loaded once per request, for both the page and its metadata.
-export const getStock = cache(async (ticker: string): Promise<Stock | null> => {
+// The stock with this current ticker. Loaded once per request, for both the page and its metadata,
+// and kept in the research cache between requests. An unknown ticker is not cached, so a stock
+// appears as soon as it is added.
+export const getStock = cache(cacheResearch("stock", async (ticker: string): Promise<Stock | null> => {
   const db = readOnlySupabase();
   const matches = await load<IdentifierRow[]>(
     db.from("security_identifiers").select(IDENTIFIER_COLUMNS).eq("identifier_type", "ticker").eq("identifier_value", ticker),
@@ -192,6 +194,18 @@ export const getStock = cache(async (ticker: string): Promise<Stock | null> => {
     load<IdentifierRow[]>(db.from("security_identifiers").select(IDENTIFIER_COLUMNS).eq("security_id", match.security_id), "security identifiers"),
   ]);
   return toStock(security, identifiers);
+}, { cacheable: (stock) => stock !== null }));
+
+// Every current ticker, for the sitemap. Only the ticker column is read.
+export const getStockTickers = cacheResearch("stock-tickers", async (): Promise<string[]> => {
+  const date = today();
+  const rows = await loadAll<{ identifier_value: string }>(
+    (from, to) => readOnlySupabase().from("security_identifiers").select("identifier_value")
+      .eq("identifier_type", "ticker").lte("valid_from", date).or(`valid_to.is.null,valid_to.gt.${date}`)
+      .order("identifier_value").order("id").range(from, to),
+    "stock tickers",
+  );
+  return [...new Set(rows.map((row) => row.identifier_value))];
 });
 
 export type StockLink = { ticker: string; name: string };

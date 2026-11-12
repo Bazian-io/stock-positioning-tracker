@@ -116,6 +116,12 @@ key reaches the browser. Public readers see only fully validated filings.
   comparison. Only long share positions are compared. Missing reports, confidential zeros and
   uncertain identities cannot establish unique holdings, and weights describe positioning rather
   than investment performance. All data access remains read-only.
+- Crawlers and background requests: `robots.txt` lets crawlers read each page at its clean address
+  and excludes links with a `?` (filters, sorting, pagination and return links), search and
+  comparison. `sitemap.xml` lists every stock and investor page, and pages name their clean address
+  as canonical. Links load a page only when clicked, not in the background. The public address used
+  for these is set in [src/lib/site.ts](src/lib/site.ts). See
+  [crawlers and link prefetching](docs/research-cache.md#crawlers-and-link-prefetching).
 
 **Data checks and backups**
 

@@ -1,9 +1,13 @@
-import Link from "next/link";
+import type { Metadata } from "next";
+import { Link } from "@/components/link";
 import { Suspense } from "react";
 import { QuarterNavigation } from "@/components/dashboard/quarter-navigation";
 import { ResearchHighlights, ResearchHighlightsLoading } from "@/components/research-highlights";
 import { ResearchSearch } from "@/components/research-search";
 import { reportingQuarter, researchHref, type ResearchParams } from "@/lib/research";
+
+// A canonical link tells search engines that every ?quarter= view is this one page.
+export const metadata: Metadata = { alternates: { canonical: "/" } };
 
 export default async function HomePage({ searchParams }: { searchParams: Promise<ResearchParams> }) {
   const quarter = reportingQuarter((await searchParams).quarter);

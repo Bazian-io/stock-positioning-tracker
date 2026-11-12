@@ -1,124 +1,159 @@
+/* The footer sets small secondary text; this section uses the page's regular reading size. */
 .section {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 28px 24px 32px;
+  padding: 40px 24px 48px;
   border-top: 1px solid var(--border);
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 .header {
   display: grid;
-  gap: 6px;
-  margin-bottom: 18px;
+  gap: 8px;
+  margin-bottom: 24px;
 }
 
 .header h2 {
   color: var(--text-primary);
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 650;
   letter-spacing: -0.02em;
 }
 
-.comparison {
-  width: 100%;
-  table-layout: fixed;
-  border-spacing: 0;
+.header p {
+  max-width: 70ch;
+  color: var(--text-secondary);
+}
+
+/* One card per version. Each lists its own updates, so the lists are not paired row by row. */
+.versions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.version {
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
-  font-size: 13px;
-  line-height: 1.6;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
 }
 
-.comparison th,
-.comparison td {
-  width: 50%;
-  padding: 14px 18px;
-  text-align: left;
-  vertical-align: top;
-  font-weight: 400;
-  overflow-wrap: anywhere;
-}
-
-.comparison thead th {
+.version h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 650;
 }
 
-.comparison tbody th,
-.comparison tbody td {
+.badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(11, 11, 11, 0.06);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.version ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.version li {
+  position: relative;
+  padding: 16px 20px 16px 42px;
+  overflow-wrap: anywhere;
+}
+
+.version li + li {
   border-top: 1px solid var(--border);
 }
 
-.previous {
-  background: var(--page);
+/* A dot beside each update's title. */
+.version li::before {
+  content: "";
+  position: absolute;
+  top: 23px;
+  left: 20px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--deemphasis-strong);
 }
 
-.comparison .current {
-  border-left: 1px solid var(--border);
-  background: var(--accent-wash);
+.version p {
+  color: var(--text-secondary);
 }
 
 .topic {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
+  line-height: 1.45;
 }
 
-.visuallyHidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+.previous h3 {
+  background: var(--page);
+}
+
+/* The current version is highlighted in the site's accent blue. */
+.current {
+  border-color: rgba(42, 120, 214, 0.35);
+}
+
+.current h3 {
+  border-bottom-color: rgba(42, 120, 214, 0.2);
+  background: var(--accent-wash);
+}
+
+.current .badge {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.current li::before {
+  background: var(--accent);
 }
 
 @media (max-width: 640px) {
   .section {
-    padding: 24px 16px;
+    padding: 32px 16px 40px;
   }
 
-  .comparison,
-  .comparison tbody {
-    display: block;
+  .header h2 {
+    font-size: 21px;
   }
 
-  .comparison thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  .comparison tbody tr {
-    display: grid;
+  .versions {
     grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
   }
 
-  .comparison tbody tr + tr {
-    border-top: 1px solid var(--border);
-  }
-
-  .comparison tbody th,
-  .comparison tbody td {
-    width: auto;
+  .version h3 {
     padding: 14px 16px;
-    border: 0;
   }
 
-  .comparison [data-label]::before {
-    content: attr(data-label);
-    display: block;
-    margin-bottom: 6px;
-    font-size: 12px;
-    font-weight: 650;
+  .version li {
+    padding: 14px 16px 14px 36px;
   }
 
-  .current .topic {
-    display: none;
+  .version li::before {
+    top: 21px;
+    left: 16px;
   }
 }

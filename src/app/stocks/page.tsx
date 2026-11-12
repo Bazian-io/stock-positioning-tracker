@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { notFound } from "next/navigation";
 import styles from "@/components/dashboard/dashboard.module.css";
 import { formatNumber, quarterLabel } from "@/lib/portfolio";
@@ -10,6 +10,7 @@ import { reportingQuarter, researchHref, resultPage, searchQuery } from "@/lib/r
 export const metadata: Metadata = {
   title: "Stocks",
   description: "Search stocks and see which tracked institutional investors report holding them.",
+  alternates: { canonical: "/stocks" },
 };
 
 const STOCKS_PER_PAGE = 50;

@@ -55,14 +55,15 @@ export async function load<T>(request: PromiseLike<{ data: T | null; error: { me
   return data as T;
 }
 
-// Loaded once per request, for both the page and its metadata.
-export const getInvestorBySlug = cache(async (slug: string): Promise<Investor | null> => {
+// Loaded once per request, for both the page and its metadata, and kept in the research cache
+// between requests. An unknown slug is not cached, so an investor appears as soon as it is added.
+export const getInvestorBySlug = cache(cacheResearch("investor", async (slug: string): Promise<Investor | null> => {
   const row = await load<InvestorRow | null>(
     readOnlySupabase().from("investors").select(INVESTOR_COLUMNS).eq("slug", slug).maybeSingle(),
     "investor",
   );
   return row ? toInvestor(row) : null;
-});
+}, { cacheable: (investor) => investor !== null }));
 
 export type InvestorSummary = Investor & {
   quarterCount: number;

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { formatNumber, formatPercent, formatUsd, formatUsdCompact, type Position } from "@/lib/portfolio";
 import type { StockLink } from "@/lib/stock-data";
 import { researchHref } from "@/lib/research";

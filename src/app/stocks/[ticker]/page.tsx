@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { notFound, redirect } from "next/navigation";
 import { Fragment } from "react";
 import styles from "@/components/dashboard/dashboard.module.css";
@@ -30,6 +30,7 @@ export async function generateMetadata({ params }: StockPageProps): Promise<Meta
   return {
     title: `${stock.name} (${stock.ticker}) institutional holdings`,
     description: `Tracked institutional investors' reported 13F holdings of ${stock.name} (${stock.ticker}), by quarter.`,
+    alternates: { canonical: `/stocks/${encodeURIComponent(stock.ticker)}` },
   };
 }
 

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { COMPARISON_FILTERS, COMPARISON_SORTS, investorComparisonPage, type ComparisonFilter, type ComparisonSort } from "@/lib/investor-comparison";
 import { formatNumber, formatPercent, formatUsdCompact, quarterLabel } from "@/lib/portfolio";
 import type { Investor } from "@/lib/portfolio-data";

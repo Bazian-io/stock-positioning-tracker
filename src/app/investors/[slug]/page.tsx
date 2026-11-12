@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import styles from "@/components/dashboard/dashboard.module.css";
@@ -35,6 +35,7 @@ export async function generateMetadata({ params }: InvestorPageProps): Promise<M
   return {
     title: `${investor.name} 13F portfolio`,
     description: `${investor.name}'s reported 13F holdings by quarter, from SEC filings.`,
+    alternates: { canonical: `/investors/${investor.slug}` },
   };
 }
 

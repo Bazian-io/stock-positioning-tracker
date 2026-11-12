@@ -26,10 +26,10 @@ const { workAsyncStorage } = await import("next/dist/server/app-render/work-asyn
 const { executeRevalidates } = await import("next/dist/server/revalidation-utils.js");
 const { cacheResearch, RESEARCH_CACHE_MAX_BYTES } = await import("./research-cache.ts");
 const { POST } = await import("../app/api/revalidate/route.ts");
-const { getInvestorSummaries, getPositions } = await import("./portfolio-data.ts");
+const { getInvestorBySlug, getInvestorSummaries, getPositions } = await import("./portfolio-data.ts");
 const { getInvestorDirectory } = await import("./investor-directory-data.ts");
 const { getPortfolioChanges, getInvestorComparison } = await import("./portfolio-changes-data.ts");
-const { getStockOwnership, getStockLinks } = await import("./stock-data.ts");
+const { getStock, getStockOwnership, getStockLinks, getStockTickers } = await import("./stock-data.ts");
 const { getHighlights } = await import("./research-highlights-data.ts");
 const { revalidateResearch } = await import("../../scripts/revalidate-research.mts");
 
@@ -125,7 +125,8 @@ globalThis.fetch = async (input, init) => {
   assert.ok(tables[table], `Unexpected table: ${table}`);
   let rows = tables[table].slice();
   for (const [key, filter] of url.searchParams) {
-    if (["select", "order", "offset", "limit", "security_identifiers.order"].includes(key)) continue;
+    // "or" carries the ticker validity window; every fixture identifier is currently valid.
+    if (["select", "order", "offset", "limit", "or", "security_identifiers.order"].includes(key)) continue;
     const dot = filter.indexOf(".");
     const op = filter.slice(0, dot), value = filter.slice(dot + 1);
     rows = rows.filter(row => {
@@ -160,6 +161,8 @@ globalThis.fetch = async (input, init) => {
     const key = column.trim().split(/::|!/)[0];
     return [key, row[key]];
   })));
+  // .single() asks for one object instead of a list.
+  if (new Headers(init?.headers).get("accept") === "application/vnd.pgrst.object+json") return Response.json(data[0]);
   return Response.json(data, { headers: { "Content-Range": `${offset}-${offset + data.length - 1}/${total}` } });
 };
 
@@ -309,6 +312,30 @@ test("summaries, changes, stock ownership and compact highlights reuse reads and
   assert.equal(updated.ownership.positions[1].shares, 175);
   assert.equal(updated.highlights.highlights[0].position.currentWeight, 1750 / 12000);
   assert.ok(queries.length > firstReads);
+});
+
+test("stock and investor lookups and sitemap tickers reuse reads, and unknown names are never cached", async () => {
+  const read = async () => ({
+    stock: await getStock("TEST"), investor: await getInvestorBySlug("test-manager"), tickers: await getStockTickers(),
+  });
+  const original = await request(read);
+  assert.deepEqual(original.stock, { ...stock, name: "TEST INC" }); // No listed name, so the name as filed.
+  assert.equal(original.investor?.name, "Test manager");
+  assert.deepEqual(original.tickers, ["TEST"]);
+  const firstReads = queries.length;
+  assert.deepEqual(await request(read), JSON.parse(JSON.stringify(original)));
+  assert.equal(queries.length, firstReads);
+  // A stock or investor added later must appear without waiting for the cache to expire.
+  assert.equal(await request(() => getStock("NEW")), null);
+  assert.equal(await request(() => getInvestorBySlug("new-manager")), null);
+  tables.securities.push({ ...tables.securities[0], id: "security-b" });
+  tables.security_identifiers.push({ ...tables.security_identifiers[1], id: "2", security_id: "security-b", identifier_value: "NEW" });
+  tables.investors.push({ ...tables.investors[0], id: "investor-b", slug: "new-manager" });
+  assert.equal((await request(() => getStock("NEW")))?.ticker, "NEW");
+  assert.equal((await request(() => getInvestorBySlug("new-manager")))?.id, "investor-b");
+  assert.deepEqual((await request(read)).tickers, ["TEST"]);
+  await invalidate();
+  assert.deepEqual((await request(read)).tickers, ["NEW", "TEST"]);
 });
 
 test("cache keys separate arguments, denominators and database sources", async () => {

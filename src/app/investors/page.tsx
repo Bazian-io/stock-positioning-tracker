@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { connection } from "next/server";
 import { Fragment } from "react";
 import styles from "@/components/dashboard/dashboard.module.css";
@@ -12,6 +12,7 @@ import { reportingQuarter, researchHref, type ResearchParams } from "@/lib/resea
 export const metadata: Metadata = {
   title: "Investors",
   description: "Institutional investors tracked from their SEC Form 13F filings.",
+  alternates: { canonical: "/investors" },
 };
 
 // The groups of the table, in order. Investors without a segment are listed last.

@@ -1,7 +1,8 @@
 # Research data cache
 
 The server caches investor summaries, the Investors directory, stock ownership, calculated quarter-to-quarter portfolio
-changes, same-quarter investor comparisons, and compact homepage highlights with Next's `unstable_cache`.
+changes, same-quarter investor comparisons, compact homepage highlights, single stock and investor lookups, and the
+sitemap's ticker list with Next's `unstable_cache`.
 It uses Vercel's managed Data Cache without enabling Cache Components or adding a service.
 React `cache()` still handles the existing within-request metadata lookups.
 
@@ -99,7 +100,7 @@ percentage is claimed.
   throws instead of returning yesterday's data. This automatic refresh does not replace invalidation
   after a correction that needs to appear immediately.
   Cache entries may also be evicted. No full-site warming, background cron or extra database table.
-- All six loaders share one application-specific tag. Corrections to an old quarter, an identifier
+- All cached loaders share one application-specific tag. Corrections to an old quarter, an identifier
   or another investor's split evidence can affect multiple pages, so targeted expiry is deferred.
 - Bump the internal cache version when changing calculation semantics or cached output shapes in a
   future release. This is unrelated to the public version section.
@@ -153,12 +154,50 @@ bounded comparison and directory request. No live migration, credential configur
 The directory batches its counts and largest holdings, then caches its complete display data.
 See [directory performance and validation](investor-directory-performance.md).
 
+## Crawlers and link prefetching
+
+On 12 November 2026 the public site drew about 37,000 Supabase requests in an hour. Every page is
+rendered on request, each page linked to many `?` variants of itself (millions of addresses in total),
+and Next preloaded every visible link, which ran a server function and the linked page's lookups.
+
+- `robots.txt` ([src/app/robots.ts](../src/app/robots.ts)) excludes every address with a `?`, plus
+  `/search`, `/compare` and `/api/`. Links between pages carry a `?`, so `sitemap.xml`
+  ([src/app/sitemap.ts](../src/app/sitemap.ts)) lists the clean address of every stock and investor
+  page. It is read on request through this cache, so a build never needs the database.
+- Each page names its clean address as canonical. The public address is set in
+  [src/lib/site.ts](../src/lib/site.ts).
+- All in-app links use [src/components/link.tsx](../src/components/link.tsx), which turns preloading
+  off. A page loads when its link is clicked.
+- `getStock` and `getInvestorBySlug` are cached. An unknown ticker or slug is never cached, so a newly
+  added stock or investor appears at once, and probing for random names cannot fill the cache.
+- In the Vercel dashboard (not in this repository), Firewall → Bot Protection is set to Challenge and
+  AI Bots to Deny. Bot Protection does not challenge verified search engine crawlers.
+
+Supabase requests for one view, measured with the production build run locally against the live
+database (read-only) on 12 November 2026. "In a browser" includes the preloads a browser triggered
+without scrolling.
+
+| Repeat view | Before | After |
+| --- | ---: | ---: |
+| Stock page | 3 | 0 |
+| Investor dashboard | 9 | 8 |
+| Home, in a browser | 21 | 0 |
+| Stocks list, in a browser | 47 | 2 |
+| Stock page, in a browser | 45 | 0 |
+| Investor dashboard, in a browser | 41 | 8 |
+
+A first view of the day still reads the database: 7 requests for a stock page, 13 for a dashboard,
+46 for the homepage and 7 for the sitemap. `robots.txt` only guides crawlers that choose to obey it;
+the firewall rules are the protection against the others.
+
 ## CPU, cost and remaining work
 
 Fresh hits skip Supabase reads and the calculations inside the cached loaders. In particular,
 homepage ranking and eligible portfolio-change grouping/split calculations are reused. Stock ownership
 hits skip downloads and normalization, but the stock page still builds its series and renders on each
-request. Every dynamic page still invokes a function; this is not full-page/CDN caching.
+request. The dashboard's quarter summaries, holdings, filings and stock links (8 requests per view), the
+stocks list and search remain uncached. Every dynamic page still invokes a function; this is not
+full-page/CDN caching.
 
 The offline tests use the installed Next IncrementalCache and invalidation implementation, with fresh
 request contexts and a synthetic PostgREST transport that refuses all external destinations. They

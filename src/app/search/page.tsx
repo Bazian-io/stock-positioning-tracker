@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { Suspense } from "react";
 import dashboard from "@/components/dashboard/dashboard.module.css";
 import styles from "@/components/research.module.css";

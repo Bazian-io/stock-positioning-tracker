@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { Suspense, type ReactNode } from "react";
 import { QuarterHomeLink, SiteNav, SiteNavFallback } from "@/components/site-nav";
 import { VersionSummary } from "@/components/version-summary";
+import { SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL), // Canonical links on each page are relative to this address.
   title: { default: "Stock Positioning Tracker", template: "%s · Stock Positioning Tracker" },
   description:
     "Research institutional ownership and short-interest trends in U.S.-listed stocks.",

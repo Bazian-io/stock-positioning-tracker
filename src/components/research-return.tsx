@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { detailReturnTarget, returnTarget } from "@/lib/research";
 import styles from "./dashboard/dashboard.module.css";
 

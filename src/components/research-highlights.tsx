@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { PendingFrame, QuarterSelect } from "@/components/dashboard/quarter-navigation";
 import { describeChange } from "@/lib/change-description";
 import { formatNumber, formatPercent, quarterLabel } from "@/lib/portfolio";

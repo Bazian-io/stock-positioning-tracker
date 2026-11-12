@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@/components/link";
 import { ResearchReturn } from "@/components/research-return";
 import { quarterLabel } from "@/lib/portfolio";
 import type { Investor, QuarterSummary } from "@/lib/portfolio-data";
